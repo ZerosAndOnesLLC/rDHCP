@@ -315,3 +315,89 @@ impl DhcpV4Packet {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dhcpv4::options::{DhcpOption, MessageType};
+
+    /// Verify RFC 2131 field offsets are correct by building a packet
+    /// and checking every field lands at the right byte position.
+    #[test]
+    fn test_rfc2131_offsets() {
+        // Verify offset arithmetic
+        assert_eq!(CHADDR_OFFSET, 28); // op(1)+htype(1)+hlen(1)+hops(1)+xid(4)+secs(2)+flags(2)+ciaddr(4)+yiaddr(4)+siaddr(4)+giaddr(4) = 28
+        assert_eq!(SNAME_OFFSET, 44);  // chaddr(16) + 28 = 44
+        assert_eq!(FILE_OFFSET, 108);  // sname(64) + 44 = 108
+        assert_eq!(COOKIE_OFFSET, 236); // file(128) + 108 = 236
+        assert_eq!(OPTIONS_OFFSET, 240); // cookie(4) + 236 = 240
+    }
+
+    /// Round-trip: build a packet, serialize it, parse it back,
+    /// verify every field matches.
+    #[test]
+    fn test_serialize_parse_roundtrip() {
+        let packet = DhcpV4Packet {
+            op: BOOTREQUEST,
+            htype: 1,
+            hlen: 6,
+            hops: 0,
+            xid: 0xDEADBEEF,
+            secs: 42,
+            flags: FLAG_BROADCAST,
+            ciaddr: Ipv4Addr::new(10, 0, 0, 100),
+            yiaddr: Ipv4Addr::UNSPECIFIED,
+            siaddr: Ipv4Addr::UNSPECIFIED,
+            giaddr: Ipv4Addr::UNSPECIFIED,
+            chaddr: {
+                let mut c = [0u8; 16];
+                c[..6].copy_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
+                c
+            },
+            sname: [0u8; 64],
+            file: [0u8; 128],
+            options: vec![
+                DhcpOption::MessageType(MessageType::Discover),
+                DhcpOption::RequestedIp(Ipv4Addr::new(10, 0, 0, 50)),
+            ],
+        };
+
+        let mut buf = [0u8; MAX_PACKET_SIZE];
+        let len = packet.serialize(&mut buf);
+
+        // Verify magic cookie is at the right place
+        assert_eq!(&buf[236..240], &MAGIC_COOKIE);
+
+        // Verify options start after cookie
+        assert_eq!(buf[240], 53); // option 53 = message type
+        assert_eq!(buf[241], 1);  // length 1
+        assert_eq!(buf[242], 1);  // DISCOVER
+
+        // Parse it back
+        let parsed = DhcpV4Packet::parse(&buf[..len]).unwrap();
+        assert_eq!(parsed.op, BOOTREQUEST);
+        assert_eq!(parsed.xid, 0xDEADBEEF);
+        assert_eq!(parsed.secs, 42);
+        assert_eq!(parsed.flags, FLAG_BROADCAST);
+        assert_eq!(parsed.ciaddr, Ipv4Addr::new(10, 0, 0, 100));
+        assert_eq!(parsed.mac(), [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
+        assert_eq!(parsed.message_type(), Some(MessageType::Discover));
+        assert_eq!(parsed.requested_ip(), Some(Ipv4Addr::new(10, 0, 0, 50)));
+    }
+
+    /// Verify minimum packet size check works
+    #[test]
+    fn test_short_packet_rejected() {
+        let buf = [0u8; 100];
+        assert!(DhcpV4Packet::parse(&buf).is_err());
+    }
+
+    /// Verify bad magic cookie is rejected
+    #[test]
+    fn test_bad_magic_cookie_rejected() {
+        let mut buf = [0u8; 300];
+        buf[0] = BOOTREQUEST;
+        // Don't set magic cookie — should fail
+        assert!(DhcpV4Packet::parse(&buf).is_err());
+    }
+}

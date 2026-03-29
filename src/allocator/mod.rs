@@ -281,3 +281,137 @@ pub fn build_allocators(
 
     Ok(allocators)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn test_allocate_sequential() {
+        let alloc = SubnetAllocator::new(
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 10)),
+        );
+        assert_eq!(alloc.capacity(), 10);
+        assert_eq!(alloc.allocated(), 0);
+
+        let ip1 = alloc.allocate().unwrap();
+        assert_eq!(ip1, IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
+        assert_eq!(alloc.allocated(), 1);
+
+        let ip2 = alloc.allocate().unwrap();
+        assert_eq!(ip2, IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)));
+    }
+
+    #[test]
+    fn test_pool_exhaustion() {
+        let alloc = SubnetAllocator::new(
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3)),
+        );
+        assert_eq!(alloc.capacity(), 3);
+
+        assert!(alloc.allocate().is_some());
+        assert!(alloc.allocate().is_some());
+        assert!(alloc.allocate().is_some());
+        assert!(alloc.allocate().is_none()); // Pool exhausted
+        assert_eq!(alloc.allocated(), 3);
+        assert_eq!(alloc.available(), 0);
+    }
+
+    #[test]
+    fn test_release_and_reallocate() {
+        let alloc = SubnetAllocator::new(
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+        );
+
+        let ip1 = alloc.allocate().unwrap();
+        let ip2 = alloc.allocate().unwrap();
+        assert!(alloc.allocate().is_none());
+
+        alloc.release(&ip1);
+        assert_eq!(alloc.allocated(), 1);
+
+        let ip3 = alloc.allocate().unwrap();
+        assert_eq!(ip3, ip1); // Should reuse released IP
+    }
+
+    #[test]
+    fn test_allocate_specific() {
+        let alloc = SubnetAllocator::new(
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 10)),
+        );
+
+        let target = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5));
+        assert!(alloc.allocate_specific(&target));
+        assert!(!alloc.allocate_specific(&target)); // Already allocated
+        assert!(alloc.is_allocated(&target));
+    }
+
+    #[test]
+    fn test_out_of_range_rejected() {
+        let alloc = SubnetAllocator::new(
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 10)),
+        );
+
+        let outside = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 11));
+        assert!(!alloc.allocate_specific(&outside));
+        assert!(!alloc.contains(&outside));
+    }
+
+    /// Critical test: verify boundary overflow fix.
+    /// Pool size 100 fits in 2 words (64+36 bits).
+    /// Bits 100-127 in the second word must NOT be allocatable.
+    #[test]
+    fn test_boundary_no_overflow() {
+        let alloc = SubnetAllocator::new(
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 100)),
+        );
+        assert_eq!(alloc.capacity(), 100);
+
+        // Allocate all 100 IPs
+        for _ in 0..100 {
+            assert!(alloc.allocate().is_some());
+        }
+        // Must be None — no overflow into padding bits
+        assert!(alloc.allocate().is_none());
+        assert_eq!(alloc.allocated(), 100);
+    }
+
+    /// Test with pool size that exactly fills a word (64 IPs)
+    #[test]
+    fn test_exact_word_boundary() {
+        let alloc = SubnetAllocator::new(
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 64)),
+        );
+        assert_eq!(alloc.capacity(), 64);
+
+        for _ in 0..64 {
+            assert!(alloc.allocate().is_some());
+        }
+        assert!(alloc.allocate().is_none());
+    }
+
+    /// Test single-IP pool
+    #[test]
+    fn test_single_ip_pool() {
+        let alloc = SubnetAllocator::new(
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+        );
+        assert_eq!(alloc.capacity(), 1);
+
+        let ip = alloc.allocate().unwrap();
+        assert_eq!(ip, IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
+        assert!(alloc.allocate().is_none());
+
+        alloc.release(&ip);
+        assert!(alloc.allocate().is_some());
+    }
+}
