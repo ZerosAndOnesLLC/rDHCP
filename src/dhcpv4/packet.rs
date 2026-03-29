@@ -17,9 +17,12 @@ const GIADDR_OFFSET: usize = 24;
 const CHADDR_OFFSET: usize = 28;
 const SNAME_OFFSET: usize = 44;
 const FILE_OFFSET: usize = 108;
-const OPTIONS_OFFSET: usize = 236;
+/// Magic cookie starts at byte 236 (after 236 bytes of fixed fields)
+const COOKIE_OFFSET: usize = 236;
+/// Options start after the 4-byte magic cookie
+const OPTIONS_OFFSET: usize = 240;
 
-/// Minimum DHCP packet size (without options, but with magic cookie)
+/// Minimum DHCP packet size (fixed fields + magic cookie)
 const MIN_PACKET_SIZE: usize = 240;
 
 /// DHCP magic cookie: 99.130.83.99
@@ -80,8 +83,8 @@ impl DhcpV4Packet {
             return Err(PacketError::TooShort(data.len()));
         }
 
-        // Verify magic cookie
-        if data[OPTIONS_OFFSET - 4..OPTIONS_OFFSET] != MAGIC_COOKIE {
+        // Verify magic cookie at bytes 236-239
+        if data[COOKIE_OFFSET..COOKIE_OFFSET + 4] != MAGIC_COOKIE {
             return Err(PacketError::BadMagicCookie);
         }
 
@@ -170,8 +173,8 @@ impl DhcpV4Packet {
         buf[SNAME_OFFSET..SNAME_OFFSET + 64].copy_from_slice(&self.sname);
         buf[FILE_OFFSET..FILE_OFFSET + 128].copy_from_slice(&self.file);
 
-        // Magic cookie
-        buf[OPTIONS_OFFSET - 4..OPTIONS_OFFSET].copy_from_slice(&MAGIC_COOKIE);
+        // Magic cookie at bytes 236-239
+        buf[COOKIE_OFFSET..COOKIE_OFFSET + 4].copy_from_slice(&MAGIC_COOKIE);
 
         // Serialize options
         let opts_len = DhcpOption::serialize_all(&self.options, &mut buf[OPTIONS_OFFSET..]);

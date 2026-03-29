@@ -1,0 +1,19 @@
+[global]
+log_level = "warn"
+log_format = "text"
+lease_db = "/tmp/rdhcpd-bench/leases"
+
+[api]
+listen = "127.0.0.1:8080"
+
+[ha]
+mode = "standalone"
+
+[[subnet]]
+network = "10.0.0.0/8"
+pool_start = "10.0.1.0"
+pool_end = "10.255.255.254"
+lease_time = 3600
+router = "10.0.0.1"
+dns = ["10.0.0.53"]
+domain = "bench.local"

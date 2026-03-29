@@ -1,6 +1,6 @@
 [package]
 name = "rdhcpd"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 description = "High-performance DHCP server with built-in HA support"
 license = "MIT"
@@ -8,6 +8,7 @@ license = "MIT"
 [[bin]]
 name = "rdhcpd"
 path = "src/main.rs"
+
 
 [dependencies]
 # Async runtime

@@ -456,36 +456,45 @@ impl<H: HaBackend> DhcpV4Server<H> {
         Ok(Some(reply))
     }
 
-    /// Select the appropriate subnet for a packet
+    /// Select the appropriate subnet for a packet.
+    /// Tries giaddr (relay) first, then ciaddr (renew), then server IP (direct).
+    /// Falls through if a match isn't found at any level.
     fn select_subnet(&self, packet: &DhcpV4Packet) -> Option<SubnetInfo> {
+        // Try giaddr first (relayed packets)
         if packet.is_relayed() {
-            // Relayed: match by giaddr
-            self.subnets.iter().find(|s| {
+            if let Some(s) = self.subnets.iter().find(|s| {
                 ip_in_subnet(
                     &IpAddr::V4(packet.giaddr),
                     &IpAddr::V4(s.network_addr),
                     s.prefix_len,
                 )
-            }).cloned()
-        } else if !packet.ciaddr.is_unspecified() {
-            // Renew/rebind/inform: match by ciaddr
-            self.subnets.iter().find(|s| {
+            }) {
+                return Some(s.clone());
+            }
+            // giaddr didn't match any subnet — fall through
+        }
+
+        // Try ciaddr (renew/rebind/inform)
+        if !packet.ciaddr.is_unspecified() {
+            if let Some(s) = self.subnets.iter().find(|s| {
                 ip_in_subnet(
                     &IpAddr::V4(packet.ciaddr),
                     &IpAddr::V4(s.network_addr),
                     s.prefix_len,
                 )
-            }).cloned()
-        } else {
-            // Direct: match by server IP (receiving interface)
-            self.subnets.iter().find(|s| {
-                ip_in_subnet(
-                    &IpAddr::V4(self.server_ip),
-                    &IpAddr::V4(s.network_addr),
-                    s.prefix_len,
-                )
-            }).cloned()
+            }) {
+                return Some(s.clone());
+            }
         }
+
+        // Fall back to server IP (direct connected / default subnet)
+        self.subnets.iter().find(|s| {
+            ip_in_subnet(
+                &IpAddr::V4(self.server_ip),
+                &IpAddr::V4(s.network_addr),
+                s.prefix_len,
+            )
+        }).cloned()
     }
 
     /// Find a reservation for this client
@@ -642,28 +651,36 @@ impl<H: HaBackend> DhcpV4Server<H> {
         )
     }
 
+    /// Check if giaddr matches any known subnet (true relay vs perfdhcp loopback)
+    fn is_known_relay(&self, giaddr: Ipv4Addr) -> bool {
+        self.subnets.iter().any(|s| {
+            ip_in_subnet(
+                &IpAddr::V4(giaddr),
+                &IpAddr::V4(s.network_addr),
+                s.prefix_len,
+            )
+        })
+    }
+
     /// Determine the destination address for a reply (RFC 2131 §4.1).
     fn reply_destination(
         &self,
         request: &DhcpV4Packet,
         reply: &DhcpV4Packet,
-        _src_addr: SocketAddr,
+        src_addr: SocketAddr,
     ) -> SocketAddr {
-        if request.is_relayed() {
-            // Relayed: send back to relay agent on port 67
+        if request.is_relayed() && self.is_known_relay(request.giaddr) {
+            // Relayed through a known relay: send back to relay agent on port 67
             SocketAddr::new(IpAddr::V4(request.giaddr), 67)
         } else if !request.ciaddr.is_unspecified() {
-            // Renew/rebind: unicast to client's existing IP
-            SocketAddr::new(IpAddr::V4(request.ciaddr), 68)
+            // Renew/rebind: unicast to client's existing IP and source port
+            SocketAddr::new(IpAddr::V4(request.ciaddr), src_addr.port())
         } else if request.wants_broadcast() || reply.yiaddr.is_unspecified() {
-            // Client requests broadcast, or we have no yiaddr to unicast to
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), 68)
+            // Client requests broadcast
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), src_addr.port())
         } else {
-            // RFC 2131 §4.1: unicast to yiaddr. If the network stack can't
-            // ARP for yiaddr (client doesn't have it yet), fall back to broadcast.
-            // Most OS stacks handle this correctly via raw sockets, but on a
-            // standard UDP socket we must broadcast.
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), 68)
+            // Default: reply to source address
+            src_addr
         }
     }
 

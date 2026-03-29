@@ -118,11 +118,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|n| n.get().min(8))
         .unwrap_or(1);
 
+    // DHCPv4 port — default 67, override with RDHCPD_V4_PORT for benchmarking
+    let dhcpv4_port: u16 = std::env::var("RDHCPD_V4_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(67);
+
     // Start DHCPv4 server if v4 subnets configured
     let mut dhcpv4_handles = Vec::new();
     if has_v4 {
         for worker_id in 0..worker_count {
-            // Use SO_REUSEPORT to allow multiple tasks to receive on port 67
             let sock = socket2::Socket::new(
                 socket2::Domain::IPV4,
                 socket2::Type::DGRAM,
@@ -132,8 +137,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             sock.set_reuse_port(true)?;
             sock.set_broadcast(true)?;
             sock.set_nonblocking(true)?;
-            sock.bind(&"0.0.0.0:67".parse::<std::net::SocketAddr>().unwrap().into())
-                .map_err(|e| format!("failed to bind DHCPv4 port 67: {} (try running as root)", e))?;
+            let bind_addr: std::net::SocketAddr = format!("0.0.0.0:{}", dhcpv4_port).parse().unwrap();
+            sock.bind(&bind_addr.into())
+                .map_err(|e| format!("failed to bind DHCPv4 port {}: {} (try running as root)", dhcpv4_port, e))?;
             let dhcpv4_socket = Arc::new(UdpSocket::from_std(sock.into())?);
 
             let dhcpv4_server = DhcpV4Server::new(

@@ -1,0 +1,50 @@
+{
+    "Dhcp4": {
+        "interfaces-config": {
+            "interfaces": ["bench0"],
+            "dhcp-socket-type": "raw"
+        },
+        "lease-database": {
+            "type": "memfile",
+            "persist": false,
+            "lfc-interval": 0
+        },
+        "valid-lifetime": 3600,
+        "subnet4": [
+            {
+                "id": 1,
+                "subnet": "192.168.99.0/24",
+                "pools": [
+                    {
+                        "pool": "192.168.99.10 - 192.168.99.250"
+                    }
+                ],
+                "option-data": [
+                    {
+                        "name": "routers",
+                        "data": "192.168.99.1"
+                    },
+                    {
+                        "name": "domain-name-servers",
+                        "data": "10.0.0.53"
+                    },
+                    {
+                        "name": "domain-name",
+                        "data": "bench.local"
+                    }
+                ]
+            }
+        ],
+        "loggers": [
+            {
+                "name": "kea-dhcp4",
+                "severity": "WARN",
+                "output_options": [
+                    {
+                        "output": "/tmp/kea-bench/kea.log"
+                    }
+                ]
+            }
+        ]
+    }
+}
