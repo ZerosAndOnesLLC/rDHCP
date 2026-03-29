@@ -1,6 +1,7 @@
 mod allocator;
 mod api;
 mod config;
+mod ddns;
 mod dhcpv4;
 mod dhcpv6;
 mod ha;
