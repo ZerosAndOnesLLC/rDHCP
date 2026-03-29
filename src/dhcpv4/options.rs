@@ -267,35 +267,40 @@ impl DhcpOption {
             }
             DhcpOption::Router(addrs) => {
                 buf[0] = code::ROUTER;
-                let len = (addrs.len() * 4) as u8;
+                // RFC 2132: max 255 bytes = 63 addresses
+                let count = addrs.len().min(63);
+                let len = (count * 4) as u8;
                 buf[1] = len;
-                for (i, addr) in addrs.iter().enumerate() {
+                for (i, addr) in addrs.iter().take(count).enumerate() {
                     buf[2 + i * 4..6 + i * 4].copy_from_slice(&addr.octets());
                 }
                 2 + len as usize
             }
             DhcpOption::DnsServers(addrs) => {
                 buf[0] = code::DNS;
-                let len = (addrs.len() * 4) as u8;
+                let count = addrs.len().min(63);
+                let len = (count * 4) as u8;
                 buf[1] = len;
-                for (i, addr) in addrs.iter().enumerate() {
+                for (i, addr) in addrs.iter().take(count).enumerate() {
                     buf[2 + i * 4..6 + i * 4].copy_from_slice(&addr.octets());
                 }
                 2 + len as usize
             }
             DhcpOption::Hostname(name) => {
                 let bytes = name.as_bytes();
+                let len = bytes.len().min(255);
                 buf[0] = code::HOSTNAME;
-                buf[1] = bytes.len() as u8;
-                buf[2..2 + bytes.len()].copy_from_slice(bytes);
-                2 + bytes.len()
+                buf[1] = len as u8;
+                buf[2..2 + len].copy_from_slice(&bytes[..len]);
+                2 + len
             }
             DhcpOption::DomainName(name) => {
                 let bytes = name.as_bytes();
+                let len = bytes.len().min(255);
                 buf[0] = code::DOMAIN_NAME;
-                buf[1] = bytes.len() as u8;
-                buf[2..2 + bytes.len()].copy_from_slice(bytes);
-                2 + bytes.len()
+                buf[1] = len as u8;
+                buf[2..2 + len].copy_from_slice(&bytes[..len]);
+                2 + len
             }
             DhcpOption::BroadcastAddr(addr) => {
                 buf[0] = code::BROADCAST_ADDR;

@@ -195,7 +195,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             info!("SIGHUP received, reloading configuration");
 
             match Config::load(&reload_config_path) {
-                Ok(new_config) => {
+                Ok(_new_config) => {
                     info!("configuration reloaded successfully");
                     // Note: subnet/pool changes require restart.
                     // SIGHUP reloads options, reservations, and logging config.
@@ -209,8 +209,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Wait for shutdown signal
     tokio::signal::ctrl_c().await?;
-    info!("shutting down");
+    info!("shutting down — flushing WAL before stopping tasks");
 
+    // Flush WAL FIRST while tasks are still alive, so pending writes land
+    wal.flush().await?;
+
+    // Then abort tasks
     if let Some(h) = dhcpv4_handle {
         h.abort();
     }
@@ -221,6 +225,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         h.abort();
     }
     expiry_handle.abort();
+
+    // Final WAL flush in case any last writes snuck in
     wal.flush().await?;
     info!("WAL flushed, goodbye");
 

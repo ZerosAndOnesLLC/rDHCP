@@ -1,7 +1,7 @@
 mod dns;
 mod tsig;
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use crate::config::DdnsConfig;
-use dns::{DnsClass, DnsMessage, DnsOpcode, DnsRcode, DnsType, ResourceRecord};
+use dns::{DnsClass, DnsMessage, DnsOpcode, DnsRcode, DnsType};
 
 /// DDNS update request
 #[derive(Debug)]
@@ -316,16 +316,7 @@ fn reverse_name(ip: &IpAddr) -> String {
             )
         }
         IpAddr::V6(v6) => {
-            let octets = v6.octets();
-            let mut nibbles = Vec::with_capacity(64);
-            for &byte in octets.iter().rev() {
-                nibbles.push(format!("{:x}", byte & 0x0F));
-                nibbles.push(format!("{:x}", (byte >> 4) & 0x0F));
-            }
-            // Reverse the nibbles (we built them backwards)
-            nibbles.reverse();
-            // Actually the reverse iteration already gives us the right order for ip6.arpa
-            // Re-reverse to fix:
+            // ip6.arpa: each nibble reversed, dot-separated
             let octets = v6.octets();
             let mut parts = Vec::with_capacity(32);
             for &byte in octets.iter().rev() {

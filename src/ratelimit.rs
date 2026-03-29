@@ -48,6 +48,21 @@ impl RateLimiter {
             }
         }
 
+        // Try get_mut first to avoid Vec allocation for existing clients (hot path)
+        if let Some(mut entry) = self.buckets.get_mut(client_id) {
+            let bucket = entry.value_mut();
+            let elapsed = now.duration_since(bucket.last_refill).as_secs_f64();
+            bucket.tokens =
+                (bucket.tokens + elapsed * self.refill_rate).min(self.max_tokens as f64);
+            bucket.last_refill = now;
+            if bucket.tokens >= 1.0 {
+                bucket.tokens -= 1.0;
+                return true;
+            }
+            return false;
+        }
+
+        // New client — allocate only on first sight
         let mut entry = self.buckets.entry(client_id.to_vec()).or_insert_with(|| {
             TokenBucket {
                 tokens: self.max_tokens as f64,

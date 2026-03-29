@@ -3,13 +3,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
 use super::peer::{read_message, write_message, TlsConfig};
-use super::protocol::{HaMessage, LeaseSyncEntry, PeerState};
+use super::protocol::{HaMessage, PeerState};
 use super::{HaBackend, HaError, HaStatus};
 use crate::lease::store::LeaseStore;
 use crate::lease::types::{Lease, LeaseState};
@@ -75,7 +74,7 @@ impl ActiveActiveBackend {
         self: &Arc<Self>,
         listen_addr: String,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let this = self.clone();
+        let _this = self.clone();
 
         // Outbound connection task — connect to peer and sync
         let outbound = self.clone();
@@ -426,14 +425,14 @@ impl ActiveActiveBackend {
 }
 
 impl HaBackend for ActiveActiveBackend {
-    async fn commit_lease(&self, lease: &Lease) -> Result<(), HaError> {
+    async fn commit_lease(&self, _lease: &Lease) -> Result<(), HaError> {
         // Commit locally is immediate — sync to peer is async
         // TODO: send lease sync to peer via the outbound connection
         // For now, the lease is committed locally and we'll sync on the next opportunity
         Ok(())
     }
 
-    async fn release_lease(&self, ip: &IpAddr) -> Result<(), HaError> {
+    async fn release_lease(&self, _ip: &IpAddr) -> Result<(), HaError> {
         // TODO: send release notification to peer
         Ok(())
     }

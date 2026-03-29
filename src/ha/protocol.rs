@@ -1,8 +1,6 @@
-use std::net::IpAddr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::lease::types::LeaseState;
 
 /// HA wire protocol messages exchanged between peers.
 /// Framed as: [4-byte big-endian length][JSON payload]

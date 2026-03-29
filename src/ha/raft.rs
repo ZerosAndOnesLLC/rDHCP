@@ -1,13 +1,12 @@
 use std::collections::BTreeMap;
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use super::peer::{read_message, write_message, TlsConfig};
 use super::protocol::HaMessage;
@@ -127,7 +126,7 @@ struct RaftState {
 }
 
 impl RaftState {
-    fn new(node_id: u64, peers: &[(u64, String)]) -> Self {
+    fn new(_node_id: u64, _peers: &[(u64, String)]) -> Self {
         Self {
             current_term: 0,
             voted_for: None,
@@ -224,7 +223,7 @@ impl RaftBackend {
         let rpc_self = self.state.clone();
         let listen_addr = self.listen_addr.clone();
         let tls_config = self.tls_config.clone();
-        let lease_store = self.lease_store.clone();
+        let _lease_store = self.lease_store.clone();
         let node_id = self.node_id;
         tokio::spawn(async move {
             if let Err(e) = Self::rpc_listener(listen_addr, rpc_self, tls_config, node_id).await {
@@ -295,13 +294,13 @@ impl RaftBackend {
         };
 
         // Vote for ourselves
-        let mut votes = 1u32;
-        let needed = (self.peers.len() as u32 + 1) / 2 + 1; // majority
+        let _votes = 1u32;
+        let _needed = (self.peers.len() as u32 + 1) / 2 + 1; // majority
 
         // Send vote requests to all peers
-        for (peer_id, peer_addr) in &self.peers {
-            let msg_json = serde_json::to_vec(&vote_request).unwrap_or_default();
-            let ha_msg = HaMessage::Heartbeat {
+        for (_peer_id, _peer_addr) in &self.peers {
+            let _msg_json = serde_json::to_vec(&vote_request).unwrap_or_default();
+            let _ha_msg = HaMessage::Heartbeat {
                 node_id: format!("raft:{}", serde_json::to_string(&vote_request).unwrap_or_default()),
                 state: super::protocol::PeerState::Normal,
                 active_leases: 0,
@@ -440,7 +439,7 @@ impl RaftBackend {
         let mut state = state.write().await;
 
         match response {
-            RaftRpc::VoteResponse { term, vote_granted } => {
+            RaftRpc::VoteResponse { term, vote_granted: _ } => {
                 if term > state.current_term {
                     state.current_term = term;
                     state.role = Role::Follower;
@@ -525,7 +524,7 @@ impl RaftBackend {
         info!(addr = %listen_addr, "Raft RPC listener started");
 
         loop {
-            let (tcp_stream, peer_addr) = listener.accept().await?;
+            let (tcp_stream, _peer_addr) = listener.accept().await?;
             tcp_stream.set_nodelay(true)?;
 
             let state = state.clone();
@@ -533,7 +532,7 @@ impl RaftBackend {
             let node_id = node_id;
 
             tokio::spawn(async move {
-                let result = if let Some(tls) = &tls_config {
+                let _result = if let Some(tls) = &tls_config {
                     let mut stream = match tls.acceptor.accept(tcp_stream).await {
                         Ok(s) => s,
                         Err(e) => {
@@ -582,7 +581,7 @@ impl RaftBackend {
     /// Handle an incoming RPC message, return response
     async fn handle_rpc_message(
         state: &Arc<RwLock<RaftState>>,
-        node_id: u64,
+        _node_id: u64,
         msg: HaMessage,
     ) -> Option<HaMessage> {
         // Extract Raft RPC from HA message

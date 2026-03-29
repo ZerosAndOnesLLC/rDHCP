@@ -161,13 +161,11 @@ impl<H: HaBackend> DhcpV6Server<H> {
 
         match reply {
             Some(reply_msg) => {
-                let mut buf = vec![0u8; MAX_DHCPV6_SIZE];
+                let mut buf = [0u8; MAX_DHCPV6_SIZE];
                 let len = reply_msg.serialize(&mut buf);
-                buf.truncate(len);
 
-                // Reply to client on port 546
                 let dest = SocketAddr::new(src_addr.ip(), 546);
-                Ok(Some((buf, dest)))
+                Ok(Some((buf[..len].to_vec(), dest)))
             }
             None => Ok(None),
         }
@@ -180,6 +178,12 @@ impl<H: HaBackend> DhcpV6Server<H> {
         src_addr: SocketAddr,
     ) -> Result<Option<(Vec<u8>, SocketAddr)>, Box<dyn std::error::Error + Send + Sync>> {
         let relay_msg = Dhcpv6RelayMessage::parse(data)?;
+
+        // RFC 8415 §5.2: drop if hop count exceeds 32
+        if relay_msg.hop_count > 32 {
+            warn!(hop_count = relay_msg.hop_count, "dropping relay with excessive hop count");
+            return Ok(None);
+        }
 
         let inner_data = match relay_msg.relay_message() {
             Some(d) => d,
@@ -216,20 +220,19 @@ impl<H: HaBackend> DhcpV6Server<H> {
 
         match reply {
             Some(reply_msg) => {
-                // Serialize inner reply
-                let mut inner_buf = vec![0u8; MAX_DHCPV6_SIZE];
+                // Serialize inner reply on stack
+                let mut inner_buf = [0u8; MAX_DHCPV6_SIZE];
                 let inner_len = reply_msg.serialize(&mut inner_buf);
-                inner_buf.truncate(inner_len);
 
-                // Wrap in relay-reply
+                // Wrap in relay-reply — RFC 8415 §5.2: relay-reply copies
+                // hop_count, link-address, peer-address from relay-forward
                 let relay_reply = Dhcpv6RelayMessage {
                     msg_type: Dhcpv6MessageType::RelayReply,
                     hop_count: relay_msg.hop_count,
                     link_address: relay_msg.link_address,
                     peer_address: relay_msg.peer_address,
                     options: {
-                        let mut opts = vec![Dhcpv6Option::RelayMessage(inner_buf)];
-                        // Preserve interface-id if present
+                        let mut opts = vec![Dhcpv6Option::RelayMessage(inner_buf[..inner_len].to_vec())];
                         if let Some(iid) = relay_msg.interface_id() {
                             opts.push(Dhcpv6Option::InterfaceId(iid.to_vec()));
                         }
@@ -237,13 +240,11 @@ impl<H: HaBackend> DhcpV6Server<H> {
                     },
                 };
 
-                let mut buf = vec![0u8; MAX_DHCPV6_SIZE];
+                let mut buf = [0u8; MAX_DHCPV6_SIZE];
                 let len = relay_reply.serialize(&mut buf);
-                buf.truncate(len);
 
-                // Reply to relay agent
                 let dest = SocketAddr::new(src_addr.ip(), 547);
-                Ok(Some((buf, dest)))
+                Ok(Some((buf[..len].to_vec(), dest)))
             }
             None => Ok(None),
         }

@@ -2,13 +2,12 @@ mod handlers;
 mod metrics;
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get};
 use axum::Router;
 use tokio::net::TcpListener;
-use tracing::{error, info};
+use tracing::info;
 
 use crate::allocator::SubnetAllocator;
 use crate::ha::HaBackend;

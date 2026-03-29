@@ -32,13 +32,14 @@ pub struct DhcpV4Server<H: HaBackend> {
     subnets: Vec<SubnetInfo>,
 }
 
-/// Pre-parsed subnet information for runtime lookups
+/// Pre-parsed subnet information for runtime lookups.
+/// Wrapped in Arc to avoid cloning on every packet.
 #[derive(Clone)]
 struct SubnetInfo {
-    network: String,
+    network: Arc<str>,
     network_addr: Ipv4Addr,
     prefix_len: u8,
-    config: SubnetConfig,
+    config: Arc<SubnetConfig>,
 }
 
 impl<H: HaBackend> DhcpV4Server<H> {
@@ -60,10 +61,10 @@ impl<H: HaBackend> DhcpV4Server<H> {
                 let (addr, prefix_len) = parse_cidr(&s.network).ok()?;
                 if let IpAddr::V4(v4) = addr {
                     Some(SubnetInfo {
-                        network: s.network.clone(),
+                        network: Arc::from(s.network.as_str()),
                         network_addr: v4,
                         prefix_len,
-                        config: s.clone(),
+                        config: Arc::new(s.clone()),
                     })
                 } else {
                     None
@@ -208,7 +209,7 @@ impl<H: HaBackend> DhcpV4Server<H> {
 
         // Check if client is requesting a specific IP
         if let Some(requested) = packet.requested_ip() {
-            if let Some(allocator) = self.allocators.get(&subnet.network) {
+            if let Some(allocator) = self.allocators.get(&*subnet.network) {
                 if allocator.contains(&IpAddr::V4(requested))
                     && !self.lease_store.is_allocated(&IpAddr::V4(requested))
                     && allocator.allocate_specific(&IpAddr::V4(requested))
@@ -227,7 +228,7 @@ impl<H: HaBackend> DhcpV4Server<H> {
         }
 
         // Allocate from pool
-        let allocator = match self.allocators.get(&subnet.network) {
+        let allocator = match self.allocators.get(&*subnet.network) {
             Some(a) => a,
             None => {
                 warn!(subnet = %subnet.network, "no allocator for subnet");
@@ -315,7 +316,7 @@ impl<H: HaBackend> DhcpV4Server<H> {
             }
         } else {
             // No existing lease — check if this is a reservation or if we need to allocate
-            if let Some(allocator) = self.allocators.get(&subnet.network) {
+            if let Some(allocator) = self.allocators.get(&*subnet.network) {
                 if !allocator.is_allocated(&ip_addr) {
                     allocator.allocate_specific(&ip_addr);
                 }
@@ -340,7 +341,7 @@ impl<H: HaBackend> DhcpV4Server<H> {
             start_time: now_epoch,
             expire_time: now_epoch + lease_time as u64,
             expires_at: Instant::now() + Duration::from_secs(lease_time as u64),
-            subnet: subnet.network.clone(),
+            subnet: subnet.network.to_string(),
         };
 
         self.ha.commit_lease(&lease).await?;
@@ -538,7 +539,7 @@ impl<H: HaBackend> DhcpV4Server<H> {
             start_time: now_epoch,
             expire_time: now_epoch + OFFER_HOLD_TIME,
             expires_at: Instant::now() + Duration::from_secs(OFFER_HOLD_TIME),
-            subnet: subnet.network.clone(),
+            subnet: subnet.network.to_string(),
         };
 
         self.lease_store.upsert(lease);
@@ -641,25 +642,27 @@ impl<H: HaBackend> DhcpV4Server<H> {
         )
     }
 
-    /// Determine the destination address for a reply
+    /// Determine the destination address for a reply (RFC 2131 §4.1).
     fn reply_destination(
         &self,
         request: &DhcpV4Packet,
-        _reply: &DhcpV4Packet,
+        reply: &DhcpV4Packet,
         _src_addr: SocketAddr,
     ) -> SocketAddr {
         if request.is_relayed() {
-            // Send back to relay agent
+            // Relayed: send back to relay agent on port 67
             SocketAddr::new(IpAddr::V4(request.giaddr), 67)
         } else if !request.ciaddr.is_unspecified() {
-            // Unicast to client's existing IP (renew/rebind)
+            // Renew/rebind: unicast to client's existing IP
             SocketAddr::new(IpAddr::V4(request.ciaddr), 68)
-        } else if request.wants_broadcast() {
-            // Client requests broadcast
+        } else if request.wants_broadcast() || reply.yiaddr.is_unspecified() {
+            // Client requests broadcast, or we have no yiaddr to unicast to
             SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), 68)
         } else {
-            // Send to the source address we received from
-            // (the OS/network stack figures out broadcast for us in most cases)
+            // RFC 2131 §4.1: unicast to yiaddr. If the network stack can't
+            // ARP for yiaddr (client doesn't have it yet), fall back to broadcast.
+            // Most OS stacks handle this correctly via raw sockets, but on a
+            // standard UDP socket we must broadcast.
             SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), 68)
         }
     }

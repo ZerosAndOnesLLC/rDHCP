@@ -68,7 +68,7 @@ pub async fn list_leases<H: HaBackend>(
     State(state): State<Arc<ApiState<H>>>,
     Query(query): Query<LeaseQuery>,
 ) -> Json<Vec<LeaseResponse>> {
-    let limit = query.limit.unwrap_or(1000);
+    let limit = query.limit.unwrap_or(1000).min(10_000);
     let offset = query.offset.unwrap_or(0);
 
     let leases: Vec<LeaseResponse> = if let Some(ref subnet) = query.subnet {

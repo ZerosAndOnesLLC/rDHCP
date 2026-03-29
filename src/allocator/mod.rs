@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use crate::config::Config;
@@ -9,26 +10,27 @@ use crate::lease::store::LeaseStore;
 ///
 /// Uses a bit vector where each bit represents an IP in the pool range.
 /// Bit = 1 means allocated, bit = 0 means available.
-/// Finding a free IP is O(N/64) worst case using 64-bit word scanning.
+/// Trailing bits beyond pool_size in the last word are pre-set to 1
+/// to prevent out-of-bounds allocation.
 pub struct SubnetAllocator {
     /// First IP in the pool (as u128 for unified v4/v6 handling)
     pool_start: u128,
-    /// Last IP in the pool
-    pool_end: u128,
     /// Total number of IPs in pool
     pool_size: u64,
     /// Whether this is an IPv4 or IPv6 pool
     is_v4: bool,
     /// Bitmap: each bit represents one IP. Index 0 = pool_start.
+    /// Trailing bits in the last word are pre-set to 1.
     bitmap: Mutex<Vec<u64>>,
-    /// Number of currently allocated IPs
-    allocated_count: std::sync::atomic::AtomicU64,
-    /// Hint for next free search (last allocated index + 1), for sequential allocation
-    next_hint: std::sync::atomic::AtomicU64,
+    /// Number of currently allocated IPs (atomic for lock-free reads)
+    allocated_count: AtomicU64,
+    /// Hint for next free search — avoids re-scanning from 0 each time
+    next_hint: AtomicU64,
 }
 
 impl SubnetAllocator {
-    /// Create a new allocator for the given pool range
+    /// Create a new allocator for the given pool range.
+    /// Pre-marks trailing bits in the last word to prevent boundary overflow.
     pub fn new(pool_start: IpAddr, pool_end: IpAddr) -> Self {
         let (start_u128, is_v4) = ip_to_u128(&pool_start);
         let end_u128 = ip_to_u128(&pool_end).0;
@@ -36,14 +38,24 @@ impl SubnetAllocator {
         let pool_size = end_u128 - start_u128 + 1;
         let num_words = ((pool_size + 63) / 64) as usize;
 
+        let mut bitmap = vec![0u64; num_words];
+
+        // Pre-set trailing bits beyond pool_size in the last word.
+        // This prevents find_free from returning an out-of-bounds index.
+        let used_bits_in_last_word = (pool_size % 64) as u32;
+        if used_bits_in_last_word != 0 && !bitmap.is_empty() {
+            let last = bitmap.len() - 1;
+            // Set all bits from used_bits_in_last_word..64 to 1
+            bitmap[last] = !((1u64 << used_bits_in_last_word) - 1);
+        }
+
         Self {
             pool_start: start_u128,
-            pool_end: end_u128,
             pool_size: pool_size as u64,
             is_v4,
-            bitmap: Mutex::new(vec![0u64; num_words]),
-            allocated_count: std::sync::atomic::AtomicU64::new(0),
-            next_hint: std::sync::atomic::AtomicU64::new(0),
+            bitmap: Mutex::new(bitmap),
+            allocated_count: AtomicU64::new(0),
+            next_hint: AtomicU64::new(0),
         }
     }
 
@@ -51,101 +63,85 @@ impl SubnetAllocator {
     /// Returns None if pool is exhausted.
     pub fn allocate(&self) -> Option<IpAddr> {
         let mut bitmap = self.bitmap.lock().unwrap();
-        let hint = self.next_hint.load(std::sync::atomic::Ordering::Relaxed);
+        let hint = self.next_hint.load(Ordering::Relaxed) as usize;
 
-        // Search from hint position, wrapping around
-        if let Some(idx) = self.find_free(&bitmap, hint as usize) {
-            self.set_bit(&mut bitmap, idx);
-            self.allocated_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            self.next_hint
-                .store((idx + 1) as u64, std::sync::atomic::Ordering::Relaxed);
-            Some(self.index_to_ip(idx))
-        } else if hint > 0 {
-            // Wrap around and search from beginning
-            if let Some(idx) = self.find_free(&bitmap, 0) {
-                self.set_bit(&mut bitmap, idx);
-                self.allocated_count
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                self.next_hint
-                    .store((idx + 1) as u64, std::sync::atomic::Ordering::Relaxed);
-                Some(self.index_to_ip(idx))
-            } else {
-                None
-            }
-        } else {
-            None
-        }
+        // Search from hint, then wrap around if needed
+        let idx = self
+            .find_free(&bitmap, hint)
+            .or_else(|| if hint > 0 { self.find_free(&bitmap, 0) } else { None })?;
+
+        self.set_bit(&mut bitmap, idx);
+        self.allocated_count.fetch_add(1, Ordering::Relaxed);
+        self.next_hint.store((idx + 1) as u64, Ordering::Relaxed);
+        Some(self.index_to_ip(idx))
     }
 
     /// Allocate a specific IP address. Returns false if already allocated or out of range.
     pub fn allocate_specific(&self, ip: &IpAddr) -> bool {
-        let ip_u128 = ip_to_u128(ip).0;
-        if ip_u128 < self.pool_start || ip_u128 > self.pool_end {
-            return false;
-        }
-        let idx = (ip_u128 - self.pool_start) as usize;
+        let idx = match self.ip_to_index(ip) {
+            Some(i) => i,
+            None => return false,
+        };
 
         let mut bitmap = self.bitmap.lock().unwrap();
         if self.get_bit(&bitmap, idx) {
-            return false; // Already allocated
+            return false;
         }
         self.set_bit(&mut bitmap, idx);
-        self.allocated_count
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.allocated_count.fetch_add(1, Ordering::Relaxed);
         true
     }
 
-    /// Release an IP back to the pool
+    /// Release an IP back to the pool.
     pub fn release(&self, ip: &IpAddr) {
-        let ip_u128 = ip_to_u128(ip).0;
-        if ip_u128 < self.pool_start || ip_u128 > self.pool_end {
-            return;
-        }
-        let idx = (ip_u128 - self.pool_start) as usize;
+        let idx = match self.ip_to_index(ip) {
+            Some(i) => i,
+            None => return,
+        };
 
         let mut bitmap = self.bitmap.lock().unwrap();
         if self.get_bit(&bitmap, idx) {
             self.clear_bit(&mut bitmap, idx);
-            self.allocated_count
-                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            self.allocated_count.fetch_sub(1, Ordering::Relaxed);
         }
     }
 
-    /// Check if a specific IP is allocated
+    /// Check if a specific IP is allocated (takes lock briefly).
     pub fn is_allocated(&self, ip: &IpAddr) -> bool {
-        let ip_u128 = ip_to_u128(ip).0;
-        if ip_u128 < self.pool_start || ip_u128 > self.pool_end {
-            return false;
-        }
-        let idx = (ip_u128 - self.pool_start) as usize;
+        let idx = match self.ip_to_index(ip) {
+            Some(i) => i,
+            None => return false,
+        };
         let bitmap = self.bitmap.lock().unwrap();
         self.get_bit(&bitmap, idx)
     }
 
-    /// Check if a specific IP is within this pool's range
+    /// Check if a specific IP is within this pool's range (lock-free).
+    #[inline]
     pub fn contains(&self, ip: &IpAddr) -> bool {
-        let ip_u128 = ip_to_u128(ip).0;
-        ip_u128 >= self.pool_start && ip_u128 <= self.pool_end
+        self.ip_to_index(ip).is_some()
     }
 
-    /// Number of allocated IPs
+    /// Number of allocated IPs (lock-free).
+    #[inline]
     pub fn allocated(&self) -> u64 {
-        self.allocated_count
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.allocated_count.load(Ordering::Relaxed)
     }
 
-    /// Total pool capacity
+    /// Total pool capacity (lock-free).
+    #[inline]
     pub fn capacity(&self) -> u64 {
         self.pool_size
     }
 
-    /// Number of available IPs
+    /// Number of available IPs (lock-free).
+    #[inline]
     pub fn available(&self) -> u64 {
-        self.pool_size - self.allocated()
+        self.pool_size.saturating_sub(self.allocated())
     }
 
-    /// Utilization percentage (0.0 - 100.0)
+    /// Utilization percentage 0.0–100.0 (lock-free).
+    #[inline]
     pub fn utilization(&self) -> f64 {
         if self.pool_size == 0 {
             return 0.0;
@@ -153,24 +149,43 @@ impl SubnetAllocator {
         (self.allocated() as f64 / self.pool_size as f64) * 100.0
     }
 
+    /// Convert an IP to a bitmap index, returning None if out of range.
+    #[inline]
+    fn ip_to_index(&self, ip: &IpAddr) -> Option<usize> {
+        let ip_u128 = ip_to_u128(ip).0;
+        if ip_u128 < self.pool_start {
+            return None;
+        }
+        let idx = (ip_u128 - self.pool_start) as u64;
+        if idx >= self.pool_size {
+            return None;
+        }
+        Some(idx as usize)
+    }
+
+    /// Find the first free (0) bit starting from `start_idx`.
+    /// Trailing bits in the last word are pre-set to 1, so no boundary check needed.
     fn find_free(&self, bitmap: &[u64], start_idx: usize) -> Option<usize> {
         let start_word = start_idx / 64;
         let start_bit = start_idx % 64;
         let num_words = bitmap.len();
 
-        // Check first partial word
-        if start_word < num_words {
-            let word = bitmap[start_word];
-            if word != u64::MAX {
-                // Mask off bits before start_bit
-                let masked = word | ((1u64 << start_bit) - 1);
-                if masked != u64::MAX {
-                    let bit = (!masked).trailing_zeros() as usize;
-                    let idx = start_word * 64 + bit;
-                    if (idx as u64) < self.pool_size {
-                        return Some(idx);
-                    }
-                }
+        if start_word >= num_words {
+            return None;
+        }
+
+        // Check first partial word — mask off bits before start_bit
+        let word = bitmap[start_word];
+        if word != u64::MAX {
+            let mask = if start_bit == 0 {
+                0u64
+            } else {
+                (1u64 << start_bit) - 1
+            };
+            let masked = word | mask;
+            if masked != u64::MAX {
+                let bit = (!masked).trailing_zeros() as usize;
+                return Some(start_word * 64 + bit);
             }
         }
 
@@ -179,40 +194,35 @@ impl SubnetAllocator {
             let word = bitmap[word_idx];
             if word != u64::MAX {
                 let bit = (!word).trailing_zeros() as usize;
-                let idx = word_idx * 64 + bit;
-                if (idx as u64) < self.pool_size {
-                    return Some(idx);
-                }
+                return Some(word_idx * 64 + bit);
             }
         }
 
         None
     }
 
+    #[inline]
     fn get_bit(&self, bitmap: &[u64], idx: usize) -> bool {
-        let word = idx / 64;
-        let bit = idx % 64;
-        (bitmap[word] >> bit) & 1 == 1
+        (bitmap[idx / 64] >> (idx % 64)) & 1 == 1
     }
 
+    #[inline]
     fn set_bit(&self, bitmap: &mut [u64], idx: usize) {
-        let word = idx / 64;
-        let bit = idx % 64;
-        bitmap[word] |= 1u64 << bit;
+        bitmap[idx / 64] |= 1u64 << (idx % 64);
     }
 
+    #[inline]
     fn clear_bit(&self, bitmap: &mut [u64], idx: usize) {
-        let word = idx / 64;
-        let bit = idx % 64;
-        bitmap[word] &= !(1u64 << bit);
+        bitmap[idx / 64] &= !(1u64 << (idx % 64));
     }
 
+    #[inline]
     fn index_to_ip(&self, idx: usize) -> IpAddr {
-        let ip_u128 = self.pool_start + idx as u128;
-        u128_to_ip(ip_u128, self.is_v4)
+        u128_to_ip(self.pool_start + idx as u128, self.is_v4)
     }
 }
 
+#[inline]
 fn ip_to_u128(ip: &IpAddr) -> (u128, bool) {
     match ip {
         IpAddr::V4(v4) => (u32::from_be_bytes(v4.octets()) as u128, true),
@@ -220,6 +230,7 @@ fn ip_to_u128(ip: &IpAddr) -> (u128, bool) {
     }
 }
 
+#[inline]
 fn u128_to_ip(val: u128, is_v4: bool) -> IpAddr {
     if is_v4 {
         IpAddr::V4(Ipv4Addr::from((val as u32).to_be_bytes()))
@@ -236,7 +247,6 @@ pub fn build_allocators(
     let mut allocators = HashMap::new();
 
     for subnet in &config.subnet {
-        // Skip prefix delegation subnets for now (Phase 3)
         if subnet.subnet_type == "prefix-delegation" {
             continue;
         }
@@ -247,7 +257,7 @@ pub fn build_allocators(
                 let end: IpAddr = e.parse()?;
                 (start, end)
             }
-            _ => continue, // No pool defined, reservations only
+            _ => continue,
         };
 
         let alloc = SubnetAllocator::new(pool_start, pool_end);
@@ -255,15 +265,13 @@ pub fn build_allocators(
         // Pre-mark reserved IPs
         for res in &subnet.reservation {
             let res_ip: IpAddr = res.ip.parse()?;
-            if alloc.contains(&res_ip) {
-                alloc.allocate_specific(&res_ip);
-            }
+            alloc.allocate_specific(&res_ip);
         }
 
         // Pre-mark existing leases
         let leases = lease_store.leases_for_subnet(&subnet.network);
         for lease in &leases {
-            if lease.is_active() && alloc.contains(&lease.ip) {
+            if lease.is_active() {
                 alloc.allocate_specific(&lease.ip);
             }
         }

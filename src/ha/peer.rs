@@ -3,7 +3,6 @@ use std::sync::Arc;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
-use tracing::warn;
 
 use super::protocol::HaMessage;
 
