@@ -1,0 +1,71 @@
+[global]
+log_level = "info"
+log_format = "text"
+lease_db = "/var/lib/rdhcpd/leases"
+
+[api]
+listen = "127.0.0.1:8080"
+# api_key = "change-me"
+
+[ha]
+mode = "standalone"
+
+# Active/Active example:
+# [ha]
+# mode = "active-active"
+# peer = "10.0.0.2:9000"
+# scope_split = 0.5
+# mclt = 3600
+# partner_down_delay = 3600
+
+# Raft example:
+# [ha]
+# mode = "raft"
+# node_id = 1
+# peers = ["10.0.0.2:9000", "10.0.0.3:9000"]
+
+# IPv4 subnet
+[[subnet]]
+network = "10.0.1.0/24"
+pool_start = "10.0.1.100"
+pool_end = "10.0.1.250"
+lease_time = 86400
+router = "10.0.1.1"
+dns = ["10.0.0.53", "10.0.0.54"]
+domain = "example.com"
+
+[[subnet.reservation]]
+mac = "aa:bb:cc:dd:ee:f1"
+ip = "10.0.1.10"
+hostname = "printer"
+
+[[subnet.reservation]]
+mac = "aa:bb:cc:dd:ee:f2"
+ip = "10.0.1.11"
+hostname = "server"
+
+# IPv6 subnet
+[[subnet]]
+network = "2001:db8:1::/64"
+pool_start = "2001:db8:1::1000"
+pool_end = "2001:db8:1::ffff"
+lease_time = 86400
+preferred_time = 43200
+dns = ["2001:db8::53"]
+domain = "example.com"
+
+# IPv6 prefix delegation
+[[subnet]]
+network = "2001:db8:pd::/48"
+type = "prefix-delegation"
+delegated_length = 56
+lease_time = 604800
+
+[ddns]
+enabled = false
+# forward_zone = "example.com"
+# reverse_zone_v4 = "1.0.10.in-addr.arpa"
+# dns_server = "10.0.0.53"
+# tsig_key = "dhcp-key"
+# tsig_algorithm = "hmac-sha256"
+# tsig_secret = "base64secret=="

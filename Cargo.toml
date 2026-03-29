@@ -1,0 +1,40 @@
+[package]
+name = "rdhcpd"
+version = "0.1.0"
+edition = "2024"
+description = "High-performance DHCP server with built-in HA support"
+license = "MIT"
+
+[[bin]]
+name = "rdhcpd"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization / config
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+
+# Error handling
+thiserror = "2"
+
+# Concurrent data structures
+dashmap = "6"
+
+# CRC for WAL checksums
+crc32fast = "1"
+
+# Byte order for packet parsing
+byteorder = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
