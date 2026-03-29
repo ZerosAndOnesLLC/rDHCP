@@ -1,4 +1,5 @@
 mod allocator;
+mod api;
 mod config;
 mod dhcpv4;
 mod dhcpv6;
@@ -9,6 +10,7 @@ mod wal;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
+use api::ApiState;
 use config::Config;
 use dhcpv4::server::DhcpV4Server;
 use dhcpv6::server::{generate_server_duid, DhcpV6Server};
@@ -59,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!(subnets = allocators.len(), "subnet allocators initialized");
 
     // Initialize HA backend
-    // TODO: Phase 4/5 — select based on config.ha
+    // TODO: select based on config.ha (active-active / raft)
     let ha: Arc<StandaloneBackend> = Arc::new(StandaloneBackend);
 
     let config = Arc::new(config);
@@ -69,6 +71,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let expiry_handle = tokio::spawn(async move {
         lease::expiry::run_expiry_task(expiry_store).await;
     });
+
+    // Start management API if configured
+    let api_handle = if let Some(ref api_config) = config.api {
+        let api_state = Arc::new(ApiState {
+            lease_store: lease_store.clone(),
+            allocators: allocators.clone(),
+            ha: ha.clone(),
+            api_key: api_config.api_key.clone(),
+        });
+
+        let listen = api_config.listen.clone();
+        Some(tokio::spawn(async move {
+            if let Err(e) = api::start(&listen, api_state).await {
+                error!(error = %e, "management API error");
+            }
+        }))
+    } else {
+        None
+    };
 
     // Determine server IP for DHCPv4
     let server_ip = config
@@ -82,9 +103,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(Ipv4Addr::UNSPECIFIED);
 
     // Check if we have v4 subnets
-    let has_v4 = config.subnet.iter().any(|s| {
-        s.network.contains('.') && s.subnet_type != "prefix-delegation"
-    });
+    let has_v4 = config
+        .subnet
+        .iter()
+        .any(|s| s.network.contains('.') && s.subnet_type != "prefix-delegation");
 
     // Check if we have v6 subnets
     let has_v6 = config.subnet.iter().any(|s| s.network.contains(':'));
@@ -92,14 +114,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start DHCPv4 server if v4 subnets configured
     let dhcpv4_handle = if has_v4 {
         let dhcpv4_socket = Arc::new(
-            UdpSocket::bind("0.0.0.0:67")
-                .await
-                .map_err(|e| {
-                    format!(
-                        "failed to bind DHCPv4 socket on port 67: {} (try running as root)",
-                        e
-                    )
-                })?,
+            UdpSocket::bind("0.0.0.0:67").await.map_err(|e| {
+                format!(
+                    "failed to bind DHCPv4 socket on port 67: {} (try running as root)",
+                    e
+                )
+            })?,
         );
         dhcpv4_socket.set_broadcast(true)?;
 
@@ -125,18 +145,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start DHCPv6 server if v6 subnets configured
     let dhcpv6_handle = if has_v6 {
         let dhcpv6_socket = Arc::new(
-            UdpSocket::bind("[::]:547")
-                .await
-                .map_err(|e| {
-                    format!(
-                        "failed to bind DHCPv6 socket on port 547: {} (try running as root)",
-                        e
-                    )
-                })?,
+            UdpSocket::bind("[::]:547").await.map_err(|e| {
+                format!(
+                    "failed to bind DHCPv6 socket on port 547: {} (try running as root)",
+                    e
+                )
+            })?,
         );
 
-        // Generate or load server DUID
-        // TODO: persist DUID to disk so it survives restarts
         let server_duid = generate_server_duid();
         info!(duid_len = server_duid.len(), "server DUID generated");
 
@@ -174,6 +190,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         h.abort();
     }
     if let Some(h) = dhcpv6_handle {
+        h.abort();
+    }
+    if let Some(h) = api_handle {
         h.abort();
     }
     expiry_handle.abort();
