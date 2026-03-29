@@ -225,7 +225,7 @@ fn lease_to_response(lease: crate::lease::types::Lease) -> LeaseResponse {
             .client_id
             .as_ref()
             .map(|c| c.iter().map(|b| format!("{:02x}", b)).collect::<String>()),
-        hostname: lease.hostname,
+        hostname: lease.hostname.map(|h| h.to_string()),
         lease_time: lease.lease_time,
         state: match lease.state {
             crate::lease::types::LeaseState::Offered => "offered".to_string(),
@@ -236,6 +236,6 @@ fn lease_to_response(lease: crate::lease::types::Lease) -> LeaseResponse {
         },
         start_time: lease.start_time,
         expire_time: lease.expire_time,
-        subnet: lease.subnet,
+        subnet: lease.subnet.to_string(),
     }
 }

@@ -284,14 +284,14 @@ impl ActiveActiveBackend {
                         ip: ip_addr,
                         mac: mac_bytes,
                         client_id,
-                        hostname,
+                        hostname: hostname.map(|h| Arc::from(h.as_str())),
                         lease_time,
                         state: lease_state,
                         start_time,
                         expire_time,
                         expires_at: std::time::Instant::now()
                             + Duration::from_secs(remaining),
-                        subnet,
+                        subnet: Arc::from(subnet.as_str()),
                     };
                     self.lease_store.upsert(lease);
                     debug!(%ip_addr, "synced lease from peer");
@@ -322,14 +322,14 @@ impl ActiveActiveBackend {
                             ip: ip_addr,
                             mac: mac_bytes,
                             client_id: entry.client_id,
-                            hostname: entry.hostname,
+                            hostname: entry.hostname.map(|h| Arc::from(h.as_str())),
                             lease_time: entry.lease_time,
                             state: lease_state,
                             start_time: entry.start_time,
                             expire_time: entry.expire_time,
                             expires_at: std::time::Instant::now()
                                 + Duration::from_secs(remaining),
-                            subnet: entry.subnet,
+                            subnet: Arc::from(entry.subnet.as_str()),
                         };
                         self.lease_store.upsert(lease);
                     }
@@ -414,12 +414,12 @@ impl ActiveActiveBackend {
                 )
             }),
             client_id: lease.client_id.clone(),
-            hostname: lease.hostname.clone(),
+            hostname: lease.hostname.as_ref().map(|h| h.to_string()),
             lease_time: lease.lease_time,
             state: lease.state as u8,
             start_time: lease.start_time,
             expire_time: lease.expire_time,
-            subnet: lease.subnet.clone(),
+            subnet: lease.subnet.to_string(),
         }
     }
 }

@@ -40,10 +40,10 @@ pub struct DhcpV6Server<H: HaBackend> {
 
 #[derive(Clone)]
 struct V6SubnetInfo {
-    network: String,
+    network: Arc<str>,
     network_addr: Ipv6Addr,
     prefix_len: u8,
-    config: SubnetConfig,
+    config: Arc<SubnetConfig>,
     is_pd: bool,
 }
 
@@ -63,10 +63,10 @@ impl<H: HaBackend> DhcpV6Server<H> {
                 let (addr, prefix_len) = parse_cidr(&s.network).ok()?;
                 if let IpAddr::V6(v6) = addr {
                     Some(V6SubnetInfo {
-                        network: s.network.clone(),
+                        network: Arc::from(s.network.as_str()),
                         network_addr: v6,
                         prefix_len,
-                        config: s.clone(),
+                        config: Arc::new(s.clone()),
                         is_pd: s.subnet_type == "prefix-delegation",
                     })
                 } else {
@@ -468,7 +468,7 @@ impl<H: HaBackend> DhcpV6Server<H> {
                             start_time: now_epoch,
                             expire_time: now_epoch + 86400,
                             expires_at: Instant::now() + Duration::from_secs(86400),
-                            subnet: String::new(),
+                            subnet: Arc::from(""),
                         };
                         self.wal.log_upsert(&lease).await?;
                         self.lease_store.upsert(lease);
@@ -629,7 +629,7 @@ impl<H: HaBackend> DhcpV6Server<H> {
         }
 
         // Allocate from pool
-        let allocator = match self.allocators.get(&subnet.network) {
+        let allocator = match self.allocators.get(&*subnet.network) {
             Some(a) => a,
             None => {
                 return Ok(IaNa {
@@ -725,7 +725,7 @@ impl<H: HaBackend> DhcpV6Server<H> {
 
         // For prefix delegation, we use the allocator but the "IP" represents
         // the prefix start address. Each allocation represents one delegated prefix.
-        let allocator = match self.allocators.get(&subnet.network) {
+        let allocator = match self.allocators.get(&*subnet.network) {
             Some(a) => a,
             None => {
                 return Ok(IaPd {
@@ -855,7 +855,7 @@ impl<H: HaBackend> DhcpV6Server<H> {
                 self.lease_store.upsert(lease);
 
                 // Ensure allocator knows this IP is taken
-                if let Some(allocator) = self.allocators.get(&subnet.network) {
+                if let Some(allocator) = self.allocators.get(&*subnet.network) {
                     allocator.allocate_specific(&ip);
                 }
 
@@ -937,7 +937,7 @@ impl<H: HaBackend> DhcpV6Server<H> {
                 self.wal.log_upsert(&lease).await?;
                 self.lease_store.upsert(lease);
 
-                if let Some(allocator) = self.allocators.get(&subnet.network) {
+                if let Some(allocator) = self.allocators.get(&*subnet.network) {
                     allocator.allocate_specific(&ip);
                 }
 

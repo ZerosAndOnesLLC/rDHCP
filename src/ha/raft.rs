@@ -770,14 +770,14 @@ impl RaftBackend {
                                 ip: ip_addr,
                                 mac: mac_bytes,
                                 client_id: client_id.clone(),
-                                hostname: hostname.clone(),
+                                hostname: hostname.as_ref().map(|h| Arc::from(h.as_str())),
                                 lease_time,
                                 state: ls,
                                 start_time,
                                 expire_time,
                                 expires_at: std::time::Instant::now()
                                     + Duration::from_secs(remaining),
-                                subnet: subnet.clone(),
+                                subnet: Arc::from(subnet.as_str()),
                             };
                             self.lease_store.upsert(lease);
                             debug!(ip = %ip, index, "applied lease upsert");
@@ -807,12 +807,12 @@ impl HaBackend for RaftBackend {
                 )
             }),
             client_id: lease.client_id.clone(),
-            hostname: lease.hostname.clone(),
+            hostname: lease.hostname.as_ref().map(|h| h.to_string()),
             lease_time: lease.lease_time,
             state: lease.state as u8,
             start_time: lease.start_time,
             expire_time: lease.expire_time,
-            subnet: lease.subnet.clone(),
+            subnet: lease.subnet.to_string(),
         };
 
         let (tx, rx) = tokio::sync::oneshot::channel();

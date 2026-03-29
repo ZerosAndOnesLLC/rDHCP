@@ -186,7 +186,7 @@ impl LeaseStore {
         self.inner
             .leases
             .iter()
-            .filter(|r| r.value().subnet == subnet)
+            .filter(|r| &*r.value().subnet == subnet)
             .map(|r| r.value().clone())
             .collect()
     }

@@ -113,69 +113,88 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Check if we have v6 subnets
     let has_v6 = config.subnet.iter().any(|s| s.network.contains(':'));
 
+    // Number of receive workers — scale across CPU cores
+    let worker_count = std::thread::available_parallelism()
+        .map(|n| n.get().min(8))
+        .unwrap_or(1);
+
     // Start DHCPv4 server if v4 subnets configured
-    let dhcpv4_handle = if has_v4 {
-        let dhcpv4_socket = Arc::new(
-            UdpSocket::bind("0.0.0.0:67").await.map_err(|e| {
-                format!(
-                    "failed to bind DHCPv4 socket on port 67: {} (try running as root)",
-                    e
-                )
-            })?,
-        );
-        dhcpv4_socket.set_broadcast(true)?;
+    let mut dhcpv4_handles = Vec::new();
+    if has_v4 {
+        for worker_id in 0..worker_count {
+            // Use SO_REUSEPORT to allow multiple tasks to receive on port 67
+            let sock = socket2::Socket::new(
+                socket2::Domain::IPV4,
+                socket2::Type::DGRAM,
+                Some(socket2::Protocol::UDP),
+            )
+            .map_err(|e| format!("failed to create DHCPv4 socket: {}", e))?;
+            sock.set_reuse_port(true)?;
+            sock.set_broadcast(true)?;
+            sock.set_nonblocking(true)?;
+            sock.bind(&"0.0.0.0:67".parse::<std::net::SocketAddr>().unwrap().into())
+                .map_err(|e| format!("failed to bind DHCPv4 port 67: {} (try running as root)", e))?;
+            let dhcpv4_socket = Arc::new(UdpSocket::from_std(sock.into())?);
 
-        let dhcpv4_server = DhcpV4Server::new(
-            config.clone(),
-            lease_store.clone(),
-            allocators.clone(),
-            wal.clone(),
-            ha.clone(),
-            server_ip,
-        );
+            let dhcpv4_server = DhcpV4Server::new(
+                config.clone(),
+                lease_store.clone(),
+                allocators.clone(),
+                wal.clone(),
+                ha.clone(),
+                server_ip,
+            );
 
-        Some(tokio::spawn(async move {
-            if let Err(e) = dhcpv4_server.run(dhcpv4_socket).await {
-                error!(error = %e, "DHCPv4 server error");
-            }
-        }))
+            dhcpv4_handles.push(tokio::spawn(async move {
+                if let Err(e) = dhcpv4_server.run(dhcpv4_socket).await {
+                    error!(error = %e, worker = worker_id, "DHCPv4 server error");
+                }
+            }));
+        }
+        info!(workers = worker_count, "DHCPv4 workers started");
     } else {
         info!("no IPv4 subnets configured, DHCPv4 disabled");
-        None
-    };
+    }
 
     // Start DHCPv6 server if v6 subnets configured
-    let dhcpv6_handle = if has_v6 {
-        let dhcpv6_socket = Arc::new(
-            UdpSocket::bind("[::]:547").await.map_err(|e| {
-                format!(
-                    "failed to bind DHCPv6 socket on port 547: {} (try running as root)",
-                    e
-                )
-            })?,
-        );
-
+    let mut dhcpv6_handles = Vec::new();
+    if has_v6 {
         let server_duid = generate_server_duid();
         info!(duid_len = server_duid.len(), "server DUID generated");
+        let server_duid: Arc<[u8]> = Arc::from(server_duid);
 
-        let dhcpv6_server = DhcpV6Server::new(
-            config.clone(),
-            lease_store.clone(),
-            allocators.clone(),
-            wal.clone(),
-            ha.clone(),
-            server_duid,
-        );
+        for worker_id in 0..worker_count {
+            let sock = socket2::Socket::new(
+                socket2::Domain::IPV6,
+                socket2::Type::DGRAM,
+                Some(socket2::Protocol::UDP),
+            )
+            .map_err(|e| format!("failed to create DHCPv6 socket: {}", e))?;
+            sock.set_reuse_port(true)?;
+            sock.set_nonblocking(true)?;
+            sock.bind(&"[::]:547".parse::<std::net::SocketAddr>().unwrap().into())
+                .map_err(|e| format!("failed to bind DHCPv6 port 547: {} (try running as root)", e))?;
+            let dhcpv6_socket = Arc::new(UdpSocket::from_std(sock.into())?);
 
-        Some(tokio::spawn(async move {
-            if let Err(e) = dhcpv6_server.run(dhcpv6_socket).await {
-                error!(error = %e, "DHCPv6 server error");
-            }
-        }))
+            let dhcpv6_server = DhcpV6Server::new(
+                config.clone(),
+                lease_store.clone(),
+                allocators.clone(),
+                wal.clone(),
+                ha.clone(),
+                server_duid.to_vec(),
+            );
+
+            dhcpv6_handles.push(tokio::spawn(async move {
+                if let Err(e) = dhcpv6_server.run(dhcpv6_socket).await {
+                    error!(error = %e, worker = worker_id, "DHCPv6 server error");
+                }
+            }));
+        }
+        info!(workers = worker_count, "DHCPv6 workers started");
     } else {
         info!("no IPv6 subnets configured, DHCPv6 disabled");
-        None
-    };
+    }
 
     info!(
         server_ip = %server_ip,
@@ -215,10 +234,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     wal.flush().await?;
 
     // Then abort tasks
-    if let Some(h) = dhcpv4_handle {
+    for h in dhcpv4_handles {
         h.abort();
     }
-    if let Some(h) = dhcpv6_handle {
+    for h in dhcpv6_handles {
         h.abort();
     }
     if let Some(h) = api_handle {

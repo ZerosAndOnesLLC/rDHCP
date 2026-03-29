@@ -335,13 +335,13 @@ impl<H: HaBackend> DhcpV4Server<H> {
             ip: ip_addr,
             mac: Some(mac),
             client_id: packet.client_id().map(|c| c.to_vec()),
-            hostname: packet.hostname().map(|s| s.to_string()),
+            hostname: packet.hostname().map(|s| Arc::from(s)),
             lease_time,
             state: LeaseState::Bound,
             start_time: now_epoch,
             expire_time: now_epoch + lease_time as u64,
             expires_at: Instant::now() + Duration::from_secs(lease_time as u64),
-            subnet: subnet.network.to_string(),
+            subnet: Arc::clone(&subnet.network),
         };
 
         self.ha.commit_lease(&lease).await?;
@@ -422,7 +422,7 @@ impl<H: HaBackend> DhcpV4Server<H> {
                 start_time: now_epoch,
                 expire_time: now_epoch + 86400,
                 expires_at: Instant::now() + Duration::from_secs(86400),
-                subnet: String::new(),
+                subnet: Arc::from(""),
             };
 
             self.wal.log_upsert(&lease).await?;
@@ -533,13 +533,13 @@ impl<H: HaBackend> DhcpV4Server<H> {
             ip: IpAddr::V4(ip),
             mac: Some(packet.mac()),
             client_id: packet.client_id().map(|c| c.to_vec()),
-            hostname: packet.hostname().map(|s| s.to_string()),
+            hostname: packet.hostname().map(|s| Arc::from(s)),
             lease_time: OFFER_HOLD_TIME as u32,
             state: LeaseState::Offered,
             start_time: now_epoch,
             expire_time: now_epoch + OFFER_HOLD_TIME,
             expires_at: Instant::now() + Duration::from_secs(OFFER_HOLD_TIME),
-            subnet: subnet.network.to_string(),
+            subnet: Arc::clone(&subnet.network),
         };
 
         self.lease_store.upsert(lease);
@@ -679,11 +679,22 @@ impl<H: HaBackend> DhcpV4Server<H> {
     }
 }
 
-fn format_mac(mac: &[u8; 6]) -> String {
-    format!(
-        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
-    )
+/// Zero-allocation MAC display wrapper for tracing.
+struct MacDisplay([u8; 6]);
+
+impl std::fmt::Display for MacDisplay {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+            self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5]
+        )
+    }
+}
+
+#[inline]
+fn format_mac(mac: &[u8; 6]) -> MacDisplay {
+    MacDisplay(*mac)
 }
 
 /// Decode a hex string (e.g. "aabbcc") into bytes. Returns None on invalid input.

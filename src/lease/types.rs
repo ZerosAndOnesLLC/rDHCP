@@ -1,4 +1,5 @@
 use std::net::IpAddr;
+use std::sync::Arc;
 use std::time::Instant;
 
 /// Lease states following the DHCP lifecycle
@@ -30,7 +31,8 @@ impl LeaseState {
     }
 }
 
-/// A DHCP lease record
+/// A DHCP lease record.
+/// Uses Arc<str> for hostname/subnet to make clone cheap (pointer bump).
 #[derive(Debug, Clone)]
 pub struct Lease {
     /// Leased IP address (v4 or v6)
@@ -40,7 +42,7 @@ pub struct Lease {
     /// Client identifier (DHCPv4 option 61 or DHCPv6 DUID)
     pub client_id: Option<Vec<u8>>,
     /// Client hostname
-    pub hostname: Option<String>,
+    pub hostname: Option<Arc<str>>,
     /// Lease duration in seconds
     pub lease_time: u32,
     /// Current state
@@ -52,24 +54,17 @@ pub struct Lease {
     /// Monotonic instant for in-memory expiry tracking
     pub expires_at: Instant,
     /// Subnet identifier (network CIDR string) this lease belongs to
-    pub subnet: String,
+    pub subnet: Arc<str>,
 }
 
 impl Lease {
+    #[inline]
     pub fn is_active(&self) -> bool {
         matches!(self.state, LeaseState::Offered | LeaseState::Bound)
     }
 
+    #[inline]
     pub fn is_expired_at(&self, now_epoch: u64) -> bool {
         now_epoch >= self.expire_time
-    }
-
-    pub fn mac_string(&self) -> Option<String> {
-        self.mac.map(|m| {
-            format!(
-                "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                m[0], m[1], m[2], m[3], m[4], m[5]
-            )
-        })
     }
 }

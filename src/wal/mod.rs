@@ -1,5 +1,6 @@
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use thiserror::Error;
@@ -366,7 +367,7 @@ impl Wal {
                     let mut hbuf = vec![0u8; hostname_len];
                     reader.read_exact(&mut hbuf).await?;
                     all_bytes.extend_from_slice(&hbuf);
-                    Some(String::from_utf8_lossy(&hbuf).into_owned())
+                    Some(Arc::from(String::from_utf8_lossy(&hbuf).as_ref()))
                 } else {
                     None
                 };
@@ -395,7 +396,7 @@ impl Wal {
                 let mut subnet_buf = vec![0u8; subnet_len];
                 reader.read_exact(&mut subnet_buf).await?;
                 all_bytes.extend_from_slice(&subnet_buf);
-                let subnet = String::from_utf8_lossy(&subnet_buf).into_owned();
+                let subnet: Arc<str> = Arc::from(String::from_utf8_lossy(&subnet_buf).as_ref());
 
                 // CRC
                 let mut crc_bytes = [0u8; 4];
