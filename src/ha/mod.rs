@@ -1,6 +1,7 @@
 pub mod active_active;
 pub mod peer;
 pub mod protocol;
+pub mod raft;
 
 use std::net::IpAddr;
 
