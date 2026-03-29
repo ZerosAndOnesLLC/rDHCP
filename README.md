@@ -1,5 +1,9 @@
 # rDHCP
 
+[![CI](https://github.com/ZerosAndOnesLLC/rDHCP/actions/workflows/ci.yml/badge.svg)](https://github.com/ZerosAndOnesLLC/rDHCP/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![GitHub release](https://img.shields.io/github/v/release/ZerosAndOnesLLC/rDHCP)](https://github.com/ZerosAndOnesLLC/rDHCP/releases)
+
 A high-performance, dual-stack DHCP server written in Rust. Drop-in replacement for ISC DHCP and Kea with built-in high availability, no external database, and a single static binary.
 
 ## Why rDHCP

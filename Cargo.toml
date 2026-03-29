@@ -2,8 +2,13 @@
 name = "rdhcpd"
 version = "0.8.0"
 edition = "2024"
-description = "High-performance DHCP server with built-in HA support"
+description = "High-performance DHCP server with built-in HA support. Dual-stack (DHCPv4/DHCPv6), active/active and Raft HA, single binary, no external DB."
 license = "MIT"
+repository = "https://github.com/ZerosAndOnesLLC/rDHCP"
+homepage = "https://github.com/ZerosAndOnesLLC/rDHCP"
+readme = "README.md"
+keywords = ["dhcp", "dhcpv6", "networking", "server", "high-availability"]
+categories = ["network-programming", "command-line-utilities"]
 
 [[bin]]
 name = "rdhcpd"
