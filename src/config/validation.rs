@@ -156,23 +156,60 @@ fn validate_subnets(config: &Config) -> Result<(), ConfigError> {
 fn validate_ha(config: &Config) -> Result<(), ConfigError> {
     match &config.ha {
         super::HaConfig::Standalone => Ok(()),
-        super::HaConfig::ActiveActive { scope_split, .. } => {
+        super::HaConfig::ActiveActive {
+            scope_split,
+            tls_cert,
+            tls_key,
+            tls_ca,
+            ..
+        } => {
             if *scope_split <= 0.0 || *scope_split >= 1.0 {
                 return Err(ConfigError::Validation(
                     "ha scope_split must be between 0.0 and 1.0 exclusive".to_string(),
                 ));
             }
+            validate_tls_config(tls_cert, tls_key, tls_ca, "active-active")?;
             Ok(())
         }
-        super::HaConfig::Raft { peers, .. } => {
+        super::HaConfig::Raft {
+            peers,
+            tls_cert,
+            tls_key,
+            tls_ca,
+            ..
+        } => {
             if peers.is_empty() {
                 return Err(ConfigError::Validation(
                     "ha raft mode requires at least one peer".to_string(),
                 ));
             }
+            validate_tls_config(tls_cert, tls_key, tls_ca, "raft")?;
             Ok(())
         }
     }
+}
+
+fn validate_tls_config(
+    cert: &Option<String>,
+    key: &Option<String>,
+    ca: &Option<String>,
+    mode: &str,
+) -> Result<(), ConfigError> {
+    // All three must be present together, or none
+    let has_cert = cert.is_some();
+    let has_key = key.is_some();
+    let has_ca = ca.is_some();
+
+    if has_cert || has_key || has_ca {
+        if !has_cert || !has_key || !has_ca {
+            return Err(ConfigError::Validation(format!(
+                "ha {} mode: tls_cert, tls_key, and tls_ca must all be specified together",
+                mode
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 pub fn parse_cidr(cidr: &str) -> Result<(IpAddr, u8), String> {

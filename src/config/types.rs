@@ -36,18 +36,32 @@ pub enum HaConfig {
     #[serde(rename = "active-active")]
     ActiveActive {
         peer: String,
+        /// Address to listen on for peer connections
+        listen: Option<String>,
         #[serde(default = "default_scope_split")]
         scope_split: f64,
         #[serde(default = "default_mclt")]
         mclt: u32,
         #[serde(default = "default_partner_down_delay")]
         partner_down_delay: u32,
+        /// TLS certificate file
+        tls_cert: Option<String>,
+        /// TLS private key file
+        tls_key: Option<String>,
+        /// TLS CA certificate for peer verification
+        tls_ca: Option<String>,
     },
 
     #[serde(rename = "raft")]
     Raft {
         node_id: u64,
         peers: Vec<String>,
+        /// TLS certificate file
+        tls_cert: Option<String>,
+        /// TLS private key file
+        tls_key: Option<String>,
+        /// TLS CA certificate for peer verification
+        tls_ca: Option<String>,
     },
 }
 
