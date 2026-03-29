@@ -200,6 +200,18 @@ pub async fn ha_status<H: HaBackend>(
     })
 }
 
+/// Health check endpoint
+pub async fn health_check<H: HaBackend>(
+    State(state): State<Arc<ApiState<H>>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let ha_status = state.ha.status();
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "ha_mode": ha_status.mode,
+        "ha_healthy": ha_status.healthy,
+    })))
+}
+
 fn lease_to_response(lease: crate::lease::types::Lease) -> LeaseResponse {
     LeaseResponse {
         ip: lease.ip.to_string(),

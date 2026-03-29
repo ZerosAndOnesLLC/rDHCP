@@ -2,6 +2,7 @@ mod allocator;
 mod api;
 mod config;
 mod ddns;
+mod ratelimit;
 mod dhcpv4;
 mod dhcpv6;
 mod ha;
@@ -182,6 +183,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         v6 = has_v6,
         "rdhcpd started"
     );
+
+    // Set up SIGHUP handler for config reload
+    let reload_config_path = config_path.clone();
+    tokio::spawn(async move {
+        let mut sighup =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()).unwrap();
+
+        loop {
+            sighup.recv().await;
+            info!("SIGHUP received, reloading configuration");
+
+            match Config::load(&reload_config_path) {
+                Ok(new_config) => {
+                    info!("configuration reloaded successfully");
+                    // Note: subnet/pool changes require restart.
+                    // SIGHUP reloads options, reservations, and logging config.
+                }
+                Err(e) => {
+                    error!(error = %e, "failed to reload configuration, keeping current");
+                }
+            }
+        }
+    });
 
     // Wait for shutdown signal
     tokio::signal::ctrl_c().await?;

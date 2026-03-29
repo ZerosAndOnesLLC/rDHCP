@@ -40,6 +40,9 @@ pub async fn start<H: HaBackend + 'static>(
         .route("/api/v1/subnets", get(handlers::list_subnets::<H>))
         // HA endpoints
         .route("/api/v1/ha/status", get(handlers::ha_status::<H>))
+        // Health check
+        .route("/health", get(handlers::health_check::<H>))
+        .route("/healthz", get(handlers::health_check::<H>))
         // Metrics
         .route("/metrics", get(metrics::metrics_handler::<H>))
         .with_state(state);
