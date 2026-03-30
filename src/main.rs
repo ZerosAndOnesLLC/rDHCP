@@ -117,15 +117,82 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start DHCPv4 server if v4 subnets configured
     let mut dhcpv4_handles = Vec::new();
     if has_v4 {
-        // Create a shared send socket for DHCP replies, bound to 0.0.0.0
+        // Create a shared send socket for DHCP replies
+        // Bind to port 67 so replies have correct source port, use SO_REUSEPORT
         let send_sock = socket2::Socket::new(
             socket2::Domain::IPV4,
             socket2::Type::DGRAM,
             Some(socket2::Protocol::UDP),
         ).map_err(|e| format!("failed to create DHCPv4 send socket: {}", e))?;
+        send_sock.set_reuse_port(true)?;
         send_sock.set_broadcast(true)?;
         send_sock.set_nonblocking(true)?;
-        send_sock.bind(&"0.0.0.0:0".parse::<std::net::SocketAddr>().unwrap().into())?;
+
+        // FreeBSD: use IP_BOUND_IF to direct broadcast replies out the correct
+        // interface. Without this, broadcasts to 255.255.255.255 may go out the
+        // default route interface instead of the DHCP subnet's interface.
+        #[cfg(target_os = "freebsd")]
+        {
+            // Find interface index by iterating getifaddrs and matching against
+            // configured subnet ranges
+            let mut bound = false;
+            let mut ifaddrs_ptr: *mut libc::ifaddrs = std::ptr::null_mut();
+            if unsafe { libc::getifaddrs(&mut ifaddrs_ptr) } == 0 {
+                let mut cur = ifaddrs_ptr;
+                while !cur.is_null() {
+                    let ifa = unsafe { &*cur };
+                    if !ifa.ifa_addr.is_null() {
+                        let sa = unsafe { &*ifa.ifa_addr };
+                        if sa.sa_family == libc::AF_INET as u8 {
+                            let sin = unsafe { &*(ifa.ifa_addr as *const libc::sockaddr_in) };
+                            let ip = Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr));
+                            // Check if this interface IP falls within any configured subnet
+                            for subnet in config.subnet.iter().filter(|s| s.network.contains('.')) {
+                                if let Ok((net_addr, prefix)) = rdhcpd::config::validation::parse_cidr(&subnet.network) {
+                                    if let std::net::IpAddr::V4(net_v4) = net_addr {
+                                        let mask = if prefix >= 32 { u32::MAX } else { u32::MAX << (32 - prefix) };
+                                        let ip_u32 = u32::from(ip);
+                                        let net_u32 = u32::from(net_v4);
+                                        if (ip_u32 & mask) == (net_u32 & mask) {
+                                            let iface_name = unsafe { std::ffi::CStr::from_ptr(ifa.ifa_name) };
+                                            let idx = unsafe { libc::if_nametoindex(ifa.ifa_name) };
+                                            if idx > 0 {
+                                                let if_idx = idx as libc::c_int;
+                                                unsafe {
+                                                    libc::setsockopt(
+                                                        send_sock.as_raw_fd(),
+                                                        libc::IPPROTO_IP,
+                                                        25, // IP_BOUND_IF
+                                                        &if_idx as *const _ as *const libc::c_void,
+                                                        std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+                                                    );
+                                                }
+                                                info!(
+                                                    interface = %iface_name.to_string_lossy(),
+                                                    ip = %ip,
+                                                    subnet = %subnet.network,
+                                                    "send socket bound to interface via IP_BOUND_IF"
+                                                );
+                                                bound = true;
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            if bound { break; }
+                        }
+                    }
+                    cur = unsafe { (*cur).ifa_next };
+                }
+                unsafe { libc::freeifaddrs(ifaddrs_ptr); }
+            }
+            if !bound {
+                info!("could not determine DHCP interface for IP_BOUND_IF, broadcasts may go out wrong interface");
+            }
+        }
+
+        send_sock.bind(&format!("0.0.0.0:{}", dhcpv4_port).parse::<std::net::SocketAddr>().unwrap().into())?;
         let send_socket = Arc::new(UdpSocket::from_std(send_sock.into())?);
 
         for worker_id in 0..worker_count {
