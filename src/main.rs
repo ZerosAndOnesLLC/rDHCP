@@ -117,16 +117,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start DHCPv4 server if v4 subnets configured
     let mut dhcpv4_handles = Vec::new();
     if has_v4 {
+        // Create a shared send socket bound to 0.0.0.0 (can send broadcasts)
+        let send_sock = socket2::Socket::new(
+            socket2::Domain::IPV4,
+            socket2::Type::DGRAM,
+            Some(socket2::Protocol::UDP),
+        ).map_err(|e| format!("failed to create DHCPv4 send socket: {}", e))?;
+        send_sock.set_broadcast(true)?;
+        send_sock.set_nonblocking(true)?;
+        send_sock.bind(&"0.0.0.0:0".parse::<std::net::SocketAddr>().unwrap().into())?;
+        let send_socket = Arc::new(UdpSocket::from_std(send_sock.into())?);
+
         for worker_id in 0..worker_count {
-            let sock = socket2::Socket::new(
+            // Receive socket — platform-specific binding
+            let recv_sock = socket2::Socket::new(
                 socket2::Domain::IPV4,
                 socket2::Type::DGRAM,
                 Some(socket2::Protocol::UDP),
             )
-            .map_err(|e| format!("failed to create DHCPv4 socket: {}", e))?;
-            sock.set_reuse_port(true)?;
-            sock.set_broadcast(true)?;
-            sock.set_nonblocking(true)?;
+            .map_err(|e| format!("failed to create DHCPv4 recv socket: {}", e))?;
+            recv_sock.set_reuse_port(true)?;
+            recv_sock.set_broadcast(true)?;
+            recv_sock.set_nonblocking(true)?;
 
             // FreeBSD: enable IP_BINDANY and bind to 255.255.255.255 so the socket
             // receives broadcast DHCP packets (FreeBSD UDP sockets bound to 0.0.0.0
@@ -136,7 +148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let enable: libc::c_int = 1;
                 unsafe {
                     libc::setsockopt(
-                        sock.as_raw_fd(),
+                        recv_sock.as_raw_fd(),
                         libc::IPPROTO_IP,
                         24, // IP_BINDANY
                         &enable as *const _ as *const libc::c_void,
@@ -149,9 +161,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let bind_addr: std::net::SocketAddr = format!("255.255.255.255:{}", dhcpv4_port).parse().unwrap();
             #[cfg(not(target_os = "freebsd"))]
             let bind_addr: std::net::SocketAddr = format!("0.0.0.0:{}", dhcpv4_port).parse().unwrap();
-            sock.bind(&bind_addr.into())
+            recv_sock.bind(&bind_addr.into())
                 .map_err(|e| format!("failed to bind DHCPv4 port {}: {} (try running as root)", dhcpv4_port, e))?;
-            let dhcpv4_socket = Arc::new(UdpSocket::from_std(sock.into())?);
+            let recv_socket = Arc::new(UdpSocket::from_std(recv_sock.into())?);
 
             let dhcpv4_server = DhcpV4Server::new(
                 config.clone(),
@@ -162,8 +174,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 server_ip,
             );
 
+            let worker_send = send_socket.clone();
             dhcpv4_handles.push(tokio::spawn(async move {
-                if let Err(e) = dhcpv4_server.run(dhcpv4_socket).await {
+                if let Err(e) = dhcpv4_server.run(recv_socket, worker_send).await {
                     error!(error = %e, worker = worker_id, "DHCPv4 server error");
                 }
             }));

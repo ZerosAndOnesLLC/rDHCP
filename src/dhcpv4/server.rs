@@ -82,14 +82,16 @@ impl<H: HaBackend> DhcpV4Server<H> {
         }
     }
 
-    /// Run the DHCPv4 server loop
-    pub async fn run(&self, socket: Arc<UdpSocket>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    /// Run the DHCPv4 server loop.
+    /// `recv_socket` is used to receive DHCP requests (may be bound to broadcast addr on FreeBSD).
+    /// `send_socket` is used to send DHCP replies (bound to the server's IP or 0.0.0.0).
+    pub async fn run(&self, recv_socket: Arc<UdpSocket>, send_socket: Arc<UdpSocket>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut recv_buf = [0u8; MAX_PACKET_SIZE];
 
-        info!(addr = %socket.local_addr()?, "DHCPv4 server listening");
+        info!(addr = %recv_socket.local_addr()?, "DHCPv4 server listening");
 
         loop {
-            let (len, src_addr) = match socket.recv_from(&mut recv_buf).await {
+            let (len, src_addr) = match recv_socket.recv_from(&mut recv_buf).await {
                 Ok(r) => r,
                 Err(e) => {
                     error!(error = %e, "failed to receive packet");
@@ -145,7 +147,7 @@ impl<H: HaBackend> DhcpV4Server<H> {
                     let mut send_buf = [0u8; MAX_PACKET_SIZE];
                     let send_len = reply.serialize(&mut send_buf);
 
-                    if let Err(e) = socket.send_to(&send_buf[..send_len], dest).await {
+                    if let Err(e) = send_socket.send_to(&send_buf[..send_len], dest).await {
                         error!(error = %e, dest = %dest, "failed to send reply");
                     } else {
                         debug!(
