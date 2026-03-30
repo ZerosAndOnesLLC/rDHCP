@@ -677,10 +677,13 @@ impl<H: HaBackend> DhcpV4Server<H> {
             // Renew/rebind: unicast to client's existing IP and source port
             SocketAddr::new(IpAddr::V4(request.ciaddr), src_addr.port())
         } else if request.wants_broadcast() || reply.yiaddr.is_unspecified() {
-            // Client requests broadcast
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), src_addr.port())
+            // Client explicitly requests broadcast or NAK
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), 68)
+        } else if src_addr.ip().is_unspecified() {
+            // Client has no IP yet (src 0.0.0.0) — must broadcast the reply
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), 68)
         } else {
-            // Default: reply to source address
+            // Unicast to client's source address
             src_addr
         }
     }
