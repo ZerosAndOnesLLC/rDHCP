@@ -12,7 +12,7 @@ If you discover a security vulnerability in rDHCP, please report it responsibly.
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Instead, email security@zerosandones.io with:
+Instead, email support@zerosandones.us with:
 
 - Description of the vulnerability
 - Steps to reproduce
