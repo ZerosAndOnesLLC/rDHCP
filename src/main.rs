@@ -1,3 +1,5 @@
+#[cfg(target_os = "freebsd")]
+use std::os::unix::io::AsRawFd;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
@@ -125,6 +127,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             sock.set_reuse_port(true)?;
             sock.set_broadcast(true)?;
             sock.set_nonblocking(true)?;
+
+            // FreeBSD: enable IP_BINDANY so the socket receives broadcast packets
+            // (standard UDP sockets on FreeBSD don't receive link-layer broadcasts)
+            #[cfg(target_os = "freebsd")]
+            {
+                // IP_BINDANY = 24 on FreeBSD — allows receiving broadcast packets
+                let enable: libc::c_int = 1;
+                unsafe {
+                    libc::setsockopt(
+                        sock.as_raw_fd(),
+                        libc::IPPROTO_IP,
+                        24, // IP_BINDANY
+                        &enable as *const _ as *const libc::c_void,
+                        std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+                    );
+                }
+            }
+
             let bind_addr: std::net::SocketAddr = format!("0.0.0.0:{}", dhcpv4_port).parse().unwrap();
             sock.bind(&bind_addr.into())
                 .map_err(|e| format!("failed to bind DHCPv4 port {}: {} (try running as root)", dhcpv4_port, e))?;
