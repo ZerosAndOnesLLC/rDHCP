@@ -128,11 +128,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             sock.set_broadcast(true)?;
             sock.set_nonblocking(true)?;
 
-            // FreeBSD: enable IP_BINDANY so the socket receives broadcast packets
-            // (standard UDP sockets on FreeBSD don't receive link-layer broadcasts)
+            // FreeBSD: enable IP_BINDANY and bind to 255.255.255.255 so the socket
+            // receives broadcast DHCP packets (FreeBSD UDP sockets bound to 0.0.0.0
+            // don't receive link-layer broadcasts)
             #[cfg(target_os = "freebsd")]
             {
-                // IP_BINDANY = 24 on FreeBSD — allows receiving broadcast packets
                 let enable: libc::c_int = 1;
                 unsafe {
                     libc::setsockopt(
@@ -145,6 +145,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
+            #[cfg(target_os = "freebsd")]
+            let bind_addr: std::net::SocketAddr = format!("255.255.255.255:{}", dhcpv4_port).parse().unwrap();
+            #[cfg(not(target_os = "freebsd"))]
             let bind_addr: std::net::SocketAddr = format!("0.0.0.0:{}", dhcpv4_port).parse().unwrap();
             sock.bind(&bind_addr.into())
                 .map_err(|e| format!("failed to bind DHCPv4 port {}: {} (try running as root)", dhcpv4_port, e))?;
