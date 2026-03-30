@@ -1,3 +1,5 @@
+//! Bitmap-based IP address allocator for DHCP subnet pools.
+
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -328,7 +330,7 @@ mod tests {
         );
 
         let ip1 = alloc.allocate().unwrap();
-        let ip2 = alloc.allocate().unwrap();
+        let _ip2 = alloc.allocate().unwrap();
         assert!(alloc.allocate().is_none());
 
         alloc.release(&ip1);

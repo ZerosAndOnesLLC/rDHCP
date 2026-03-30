@@ -32,9 +32,6 @@ const MAGIC_COOKIE: [u8; 4] = [99, 130, 83, 99];
 const BOOTREQUEST: u8 = 1;
 const BOOTREPLY: u8 = 2;
 
-/// Hardware type: Ethernet
-const HTYPE_ETHERNET: u8 = 1;
-
 /// Broadcast flag
 const FLAG_BROADCAST: u16 = 0x8000;
 
@@ -45,33 +42,54 @@ pub const MAX_PACKET_SIZE: usize = 1500;
 /// where possible, but copies variable-length data (options) for safe ownership.
 #[derive(Debug)]
 pub struct DhcpV4Packet {
+    /// Message op code: 1 = BOOTREQUEST, 2 = BOOTREPLY.
     pub op: u8,
+    /// Hardware address type (1 = Ethernet).
     pub htype: u8,
+    /// Hardware address length in bytes.
     pub hlen: u8,
+    /// Relay agent hop count.
     pub hops: u8,
+    /// Transaction ID chosen by the client.
     pub xid: u32,
+    /// Seconds elapsed since the client began the DHCP process.
     pub secs: u16,
+    /// Flags (bit 0 = broadcast).
     pub flags: u16,
+    /// Client IP address (set during RENEW/REBIND).
     pub ciaddr: Ipv4Addr,
+    /// "Your" IP address assigned by the server.
     pub yiaddr: Ipv4Addr,
+    /// Next server IP address (used in BOOTP).
     pub siaddr: Ipv4Addr,
+    /// Relay agent IP address.
     pub giaddr: Ipv4Addr,
+    /// Client hardware address (up to 16 bytes).
     pub chaddr: [u8; 16],
+    /// Optional server host name (null-terminated).
     pub sname: [u8; 64],
+    /// Boot file name (null-terminated).
     pub file: [u8; 128],
+    /// Parsed DHCP options.
     pub options: Vec<DhcpOption>,
 }
 
+/// Errors encountered while parsing a DHCPv4 packet.
 #[derive(Debug, thiserror::Error)]
 pub enum PacketError {
+    /// Packet is shorter than the minimum 240-byte fixed header.
     #[error("packet too short: {0} bytes (minimum {MIN_PACKET_SIZE})")]
     TooShort(usize),
+    /// The 4-byte magic cookie at offset 236 does not match 99.130.83.99.
     #[error("invalid magic cookie")]
     BadMagicCookie,
+    /// The op field is neither BOOTREQUEST (1) nor BOOTREPLY (2).
     #[error("invalid op code: {0}")]
     BadOpCode(u8),
+    /// An option TLV is truncated or has an invalid length at the given offset.
     #[error("malformed option at offset {0}")]
     MalformedOption(usize),
+    /// The required DHCP message type option (53) was not found.
     #[error("missing message type option")]
     MissingMessageType,
 }

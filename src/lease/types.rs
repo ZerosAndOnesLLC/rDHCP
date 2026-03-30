@@ -19,6 +19,7 @@ pub enum LeaseState {
 }
 
 impl LeaseState {
+    /// Convert a raw byte to a `LeaseState`, returning `None` for invalid values.
     pub fn from_u8(v: u8) -> Option<Self> {
         match v {
             0 => Some(Self::Offered),
@@ -32,7 +33,7 @@ impl LeaseState {
 }
 
 /// A DHCP lease record.
-/// Uses Arc<str> for hostname/subnet to make clone cheap (pointer bump).
+/// Uses `Arc<str>` for hostname/subnet to make clone cheap (pointer bump).
 #[derive(Debug, Clone)]
 pub struct Lease {
     /// Leased IP address (v4 or v6)
@@ -58,11 +59,13 @@ pub struct Lease {
 }
 
 impl Lease {
+    /// Returns `true` if the lease is in the `Offered` or `Bound` state.
     #[inline]
     pub fn is_active(&self) -> bool {
         matches!(self.state, LeaseState::Offered | LeaseState::Bound)
     }
 
+    /// Returns `true` if the lease has expired relative to `now_epoch` (seconds since UNIX epoch).
     #[inline]
     pub fn is_expired_at(&self, now_epoch: u64) -> bool {
         now_epoch >= self.expire_time

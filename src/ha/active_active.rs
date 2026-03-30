@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::net::TcpListener;
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, info, warn};
 
 use super::peer::{read_message, write_message, TlsConfig};
@@ -33,6 +33,10 @@ pub struct ActiveActiveBackend {
     lease_store: LeaseStore,
     /// Last heartbeat received from peer (epoch millis)
     last_heartbeat: AtomicU64,
+    /// Channel for sending messages to the outbound peer connection
+    peer_tx: mpsc::Sender<HaMessage>,
+    /// Receiver end — consumed by the outbound loop
+    peer_rx: RwLock<Option<mpsc::Receiver<HaMessage>>>,
 }
 
 struct FailoverState {
@@ -42,6 +46,7 @@ struct FailoverState {
 }
 
 impl ActiveActiveBackend {
+    /// Create a new active/active backend with the given split-scope configuration.
     pub fn new(
         node_id: String,
         peer_addr: String,
@@ -51,6 +56,7 @@ impl ActiveActiveBackend {
         lease_store: LeaseStore,
         tls_config: Option<Arc<TlsConfig>>,
     ) -> Self {
+        let (peer_tx, peer_rx) = mpsc::channel(1024);
         Self {
             node_id,
             peer_addr,
@@ -65,6 +71,8 @@ impl ActiveActiveBackend {
             tls_config,
             lease_store,
             last_heartbeat: AtomicU64::new(0),
+            peer_tx,
+            peer_rx: RwLock::new(Some(peer_rx)),
         }
     }
 
@@ -74,8 +82,6 @@ impl ActiveActiveBackend {
         self: &Arc<Self>,
         listen_addr: String,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let _this = self.clone();
-
         // Outbound connection task — connect to peer and sync
         let outbound = self.clone();
         tokio::spawn(async move {
@@ -100,11 +106,19 @@ impl ActiveActiveBackend {
     }
 
     /// Outbound connection loop — connects to peer, sends heartbeats and lease syncs
-    async fn outbound_loop(&self) {
+    async fn outbound_loop(self: Arc<Self>) {
+        // Take the receiver — only one outbound loop runs
+        let mut peer_rx = self
+            .peer_rx
+            .write()
+            .await
+            .take()
+            .expect("peer_rx already consumed");
+
         loop {
             info!(peer = %self.peer_addr, "connecting to HA peer");
 
-            match self.connect_to_peer().await {
+            match self.connect_to_peer(&mut peer_rx).await {
                 Ok(()) => {
                     info!(peer = %self.peer_addr, "peer connection closed");
                 }
@@ -128,7 +142,10 @@ impl ActiveActiveBackend {
         }
     }
 
-    async fn connect_to_peer(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn connect_to_peer(
+        &self,
+        peer_rx: &mut mpsc::Receiver<HaMessage>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let tcp = tokio::net::TcpStream::connect(&self.peer_addr).await?;
         tcp.set_nodelay(true)?;
 
@@ -150,27 +167,36 @@ impl ActiveActiveBackend {
             }
         }
 
-        // Send heartbeats on interval
+        // Multiplex heartbeats and queued lease sync messages
         let mut heartbeat_interval = tokio::time::interval(Duration::from_secs(1));
 
         loop {
-            heartbeat_interval.tick().await;
+            tokio::select! {
+                _ = heartbeat_interval.tick() => {
+                    let state = self.state.read().await;
+                    let heartbeat = HaMessage::Heartbeat {
+                        node_id: self.node_id.clone(),
+                        state: state.peer_state,
+                        active_leases: self.lease_store.active_count() as u64,
+                        timestamp: epoch_now(),
+                    };
+                    drop(state);
 
-            let state = self.state.read().await;
-            let heartbeat = HaMessage::Heartbeat {
-                node_id: self.node_id.clone(),
-                state: state.peer_state,
-                active_leases: self.lease_store.active_count() as u64,
-                timestamp: epoch_now(),
-            };
-            drop(state);
-
-            if let Err(e) = write_message(&mut tls_stream, &heartbeat).await {
-                return Err(e);
+                    if let Err(e) = write_message(&mut tls_stream, &heartbeat).await {
+                        return Err(e);
+                    }
+                }
+                msg = peer_rx.recv() => {
+                    match msg {
+                        Some(ha_msg) => {
+                            if let Err(e) = write_message(&mut tls_stream, &ha_msg).await {
+                                return Err(e);
+                            }
+                        }
+                        None => return Ok(()), // channel closed
+                    }
+                }
             }
-
-            // Try to read any messages (non-blocking would be better, but for simplicity
-            // we'll rely on the inbound listener for receiving messages)
         }
     }
 
@@ -425,15 +451,35 @@ impl ActiveActiveBackend {
 }
 
 impl HaBackend for ActiveActiveBackend {
-    async fn commit_lease(&self, _lease: &Lease) -> Result<(), HaError> {
-        // Commit locally is immediate — sync to peer is async
-        // TODO: send lease sync to peer via the outbound connection
-        // For now, the lease is committed locally and we'll sync on the next opportunity
+    async fn commit_lease(&self, lease: &Lease) -> Result<(), HaError> {
+        // In non-normal state, cap effective lease time to MCLT
+        let peer_state = self
+            .state
+            .try_read()
+            .map(|s| s.peer_state)
+            .unwrap_or(PeerState::CommunicationsInterrupted);
+
+        if peer_state != PeerState::Normal && lease.lease_time > self.mclt {
+            warn!(
+                ip = %lease.ip,
+                lease_time = lease.lease_time,
+                mclt = self.mclt,
+                state = %peer_state,
+                "lease exceeds MCLT during degraded state"
+            );
+        }
+
+        // Sync to peer asynchronously — best-effort, don't block the client
+        let msg = Self::lease_to_sync_msg(lease);
+        let _ = self.peer_tx.try_send(msg);
         Ok(())
     }
 
-    async fn release_lease(&self, _ip: &IpAddr) -> Result<(), HaError> {
-        // TODO: send release notification to peer
+    async fn release_lease(&self, ip: &IpAddr) -> Result<(), HaError> {
+        let msg = HaMessage::LeaseRelease {
+            ip: ip.to_string(),
+        };
+        let _ = self.peer_tx.try_send(msg);
         Ok(())
     }
 

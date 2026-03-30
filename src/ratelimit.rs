@@ -1,3 +1,5 @@
+//! Per-client rate limiting and MAC-based access control.
+
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -102,6 +104,7 @@ pub struct MacAcl {
 }
 
 impl MacAcl {
+    /// Create a new ACL with the given allow and deny lists.
     pub fn new(allow: Vec<[u8; 6]>, deny: Vec<[u8; 6]>) -> Self {
         Self { allow, deny }
     }

@@ -14,6 +14,7 @@ pub enum DnsType {
 /// DNS record classes
 #[derive(Debug, Clone, Copy)]
 #[repr(u16)]
+#[allow(dead_code)]
 pub enum DnsClass {
     IN = 1,
     ANY = 255,
@@ -23,6 +24,7 @@ pub enum DnsClass {
 /// DNS opcodes
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
+#[allow(dead_code)]
 pub enum DnsOpcode {
     Query = 0,
     Update = 5,
@@ -30,6 +32,7 @@ pub enum DnsOpcode {
 
 /// DNS response codes
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 pub enum DnsRcode {
     NoError,
     FormErr,

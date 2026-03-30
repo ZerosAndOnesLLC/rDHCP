@@ -6,17 +6,26 @@ use super::packet::PacketError;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum MessageType {
+    /// Client broadcast to locate available servers.
     Discover = 1,
+    /// Server response to a Discover with an IP offer.
     Offer = 2,
+    /// Client request to accept an offered IP or renew a lease.
     Request = 3,
+    /// Client indicates the offered address is already in use.
     Decline = 4,
+    /// Server acknowledgement confirming a lease.
     Ack = 5,
+    /// Server negative acknowledgement refusing a request.
     Nak = 6,
+    /// Client gracefully relinquishes its lease.
     Release = 7,
+    /// Client requests configuration parameters without a lease.
     Inform = 8,
 }
 
 impl MessageType {
+    /// Convert a raw byte value to a `MessageType`, returning `None` for unknown values.
     pub fn from_u8(v: u8) -> Option<Self> {
         match v {
             1 => Some(Self::Discover),
@@ -32,48 +41,86 @@ impl MessageType {
     }
 }
 
-/// Well-known DHCP option codes
+/// Well-known DHCP option codes (RFC 2132).
 pub mod code {
+    //! Numeric constants for standard DHCP option codes.
+
+    /// Padding byte (option 0).
     pub const PAD: u8 = 0;
+    /// Subnet mask (option 1).
     pub const SUBNET_MASK: u8 = 1;
+    /// Default gateway routers (option 3).
     pub const ROUTER: u8 = 3;
+    /// DNS server addresses (option 6).
     pub const DNS: u8 = 6;
+    /// Client hostname (option 12).
     pub const HOSTNAME: u8 = 12;
+    /// Domain name for DNS resolution (option 15).
     pub const DOMAIN_NAME: u8 = 15;
+    /// Broadcast address (option 28).
     pub const BROADCAST_ADDR: u8 = 28;
+    /// Client-requested IP address (option 50).
     pub const REQUESTED_IP: u8 = 50;
+    /// IP address lease time in seconds (option 51).
     pub const LEASE_TIME: u8 = 51;
+    /// DHCP message type (option 53).
     pub const MESSAGE_TYPE: u8 = 53;
+    /// Server identifier (option 54).
     pub const SERVER_ID: u8 = 54;
+    /// Parameter request list (option 55).
     pub const PARAMETER_REQUEST_LIST: u8 = 55;
+    /// Maximum DHCP message size the client will accept (option 57).
     pub const MAX_MESSAGE_SIZE: u8 = 57;
+    /// Renewal (T1) time in seconds (option 58).
     pub const RENEWAL_TIME: u8 = 58;
+    /// Rebinding (T2) time in seconds (option 59).
     pub const REBINDING_TIME: u8 = 59;
+    /// Vendor class identifier (option 60).
     pub const VENDOR_CLASS_ID: u8 = 60;
+    /// Client identifier (option 61).
     pub const CLIENT_ID: u8 = 61;
+    /// Relay agent information (option 82).
     pub const RELAY_AGENT_INFO: u8 = 82;
+    /// End-of-options marker (option 255).
     pub const END: u8 = 255;
 }
 
 /// Parsed DHCP options
 #[derive(Debug, Clone)]
 pub enum DhcpOption {
+    /// Subnet mask (option 1).
     SubnetMask(Ipv4Addr),
+    /// Default gateway router(s) (option 3).
     Router(Vec<Ipv4Addr>),
+    /// DNS server address(es) (option 6).
     DnsServers(Vec<Ipv4Addr>),
+    /// Client hostname (option 12).
     Hostname(String),
+    /// Domain name for DNS resolution (option 15).
     DomainName(String),
+    /// Broadcast address for the subnet (option 28).
     BroadcastAddr(Ipv4Addr),
+    /// IP address requested by the client (option 50).
     RequestedIp(Ipv4Addr),
+    /// Lease duration in seconds (option 51).
     LeaseTime(u32),
+    /// DHCP message type (option 53).
     MessageType(MessageType),
+    /// Server identifier address (option 54).
     ServerIdentifier(Ipv4Addr),
+    /// List of option codes the client is requesting (option 55).
     ParameterRequestList(Vec<u8>),
+    /// Maximum DHCP message size the client will accept (option 57).
     MaxMessageSize(u16),
+    /// Renewal (T1) time in seconds (option 58).
     RenewalTime(u32),
+    /// Rebinding (T2) time in seconds (option 59).
     RebindingTime(u32),
+    /// Vendor class identifier (option 60).
     VendorClassId(Vec<u8>),
+    /// Client identifier (option 61).
     ClientIdentifier(Vec<u8>),
+    /// Relay agent information sub-options (option 82).
     RelayAgentInfo(Vec<u8>),
     /// Unknown option: (code, data)
     Unknown(u8, Vec<u8>),

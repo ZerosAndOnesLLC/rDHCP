@@ -21,7 +21,6 @@ const OFFER_HOLD_TIME: u64 = 30;
 
 /// DHCPv4 server
 pub struct DhcpV4Server<H: HaBackend> {
-    config: Arc<Config>,
     lease_store: LeaseStore,
     allocators: Arc<HashMap<String, SubnetAllocator>>,
     wal: Arc<Wal>,
@@ -43,6 +42,7 @@ struct SubnetInfo {
 }
 
 impl<H: HaBackend> DhcpV4Server<H> {
+    /// Create a new DHCPv4 server with the given configuration, lease store, and HA backend.
     pub fn new(
         config: Arc<Config>,
         lease_store: LeaseStore,
@@ -73,7 +73,6 @@ impl<H: HaBackend> DhcpV4Server<H> {
             .collect();
 
         Self {
-            config,
             lease_store,
             allocators,
             wal,

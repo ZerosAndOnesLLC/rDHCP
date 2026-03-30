@@ -25,8 +25,11 @@ enum Role {
 /// Raft log entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogEntry {
+    /// Election term in which this entry was created.
     pub term: u64,
+    /// Position of this entry in the log (1-indexed).
     pub index: u64,
+    /// The command to be applied to the state machine.
     pub command: RaftCommand,
 }
 
@@ -35,18 +38,30 @@ pub struct LogEntry {
 pub enum RaftCommand {
     /// Upsert a lease
     LeaseUpsert {
+        /// Leased IP address as a string.
         ip: String,
+        /// Client MAC address (colon-separated hex).
         mac: Option<String>,
+        /// DHCP client identifier (option 61).
         client_id: Option<Vec<u8>>,
+        /// Client-provided hostname.
         hostname: Option<String>,
+        /// Granted lease duration in seconds.
         lease_time: u32,
+        /// Numeric lease state (see `LeaseState`).
         state: u8,
+        /// Epoch timestamp when the lease started.
         start_time: u64,
+        /// Epoch timestamp when the lease expires.
         expire_time: u64,
+        /// Subnet CIDR this lease belongs to.
         subnet: String,
     },
     /// Remove a lease
-    LeaseRemove { ip: String },
+    LeaseRemove {
+        /// IP address of the lease to remove.
+        ip: String,
+    },
     /// No-op entry (used for leader confirmation)
     Noop,
 }
@@ -56,27 +71,44 @@ pub enum RaftCommand {
 pub enum RaftRpc {
     /// RequestVote RPC
     VoteRequest {
+        /// Candidate's current term.
         term: u64,
+        /// ID of the candidate requesting the vote.
         candidate_id: u64,
+        /// Index of the candidate's last log entry.
         last_log_index: u64,
+        /// Term of the candidate's last log entry.
         last_log_term: u64,
     },
+    /// Response to a VoteRequest.
     VoteResponse {
+        /// Responder's current term.
         term: u64,
+        /// Whether the vote was granted.
         vote_granted: bool,
     },
     /// AppendEntries RPC
     AppendEntries {
+        /// Leader's current term.
         term: u64,
+        /// ID of the leader sending entries.
         leader_id: u64,
+        /// Index of the log entry immediately preceding new entries.
         prev_log_index: u64,
+        /// Term of the entry at `prev_log_index`.
         prev_log_term: u64,
+        /// Log entries to replicate (empty for heartbeats).
         entries: Vec<LogEntry>,
+        /// Leader's current commit index.
         leader_commit: u64,
     },
+    /// Response to an AppendEntries RPC.
     AppendEntriesResponse {
+        /// Responder's current term.
         term: u64,
+        /// Whether the follower's log matched and entries were appended.
         success: bool,
+        /// Highest log index stored by the responder.
         match_index: u64,
     },
 }
@@ -181,6 +213,7 @@ impl RaftState {
 }
 
 impl RaftBackend {
+    /// Create a new Raft backend and spawn the consensus loop.
     pub fn new(
         node_id: u64,
         peers: Vec<(u64, String)>,

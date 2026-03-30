@@ -31,6 +31,7 @@ struct LeaseStoreInner {
 }
 
 impl LeaseStore {
+    /// Create an empty lease store with no leases.
     pub fn new() -> Self {
         Self {
             inner: Arc::new(LeaseStoreInner {

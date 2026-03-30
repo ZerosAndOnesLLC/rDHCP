@@ -1,3 +1,5 @@
+//! Management REST API for querying leases, subnets, HA status, and metrics.
+
 mod handlers;
 mod metrics;
 
@@ -15,9 +17,13 @@ use crate::lease::store::LeaseStore;
 
 /// Shared state available to all API handlers
 pub struct ApiState<H: HaBackend> {
+    /// In-memory lease store for querying active and historical leases
     pub lease_store: LeaseStore,
+    /// Subnet allocators keyed by network CIDR string
     pub allocators: Arc<HashMap<String, SubnetAllocator>>,
+    /// High-availability backend for peer state replication
     pub ha: Arc<H>,
+    /// Optional API key for authenticating management requests
     pub api_key: Option<String>,
 }
 

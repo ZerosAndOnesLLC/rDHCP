@@ -9,27 +9,43 @@ use serde::{Deserialize, Serialize};
 pub enum HaMessage {
     /// Heartbeat / keepalive
     Heartbeat {
+        /// Unique identifier of the sending node.
         node_id: String,
+        /// Current failover state of the sender.
         state: PeerState,
+        /// Number of active leases on the sender.
         active_leases: u64,
+        /// Unix epoch timestamp (seconds) when the heartbeat was generated.
         timestamp: u64,
     },
 
     /// Lease sync — push a lease to the peer
     LeaseSync {
+        /// Leased IP address as a string.
         ip: String,
+        /// Client MAC address (colon-separated hex).
         mac: Option<String>,
+        /// DHCP client identifier (option 61).
         client_id: Option<Vec<u8>>,
+        /// Client-provided hostname.
         hostname: Option<String>,
+        /// Granted lease duration in seconds.
         lease_time: u32,
+        /// Numeric lease state (see `LeaseState`).
         state: u8,
+        /// Epoch timestamp when the lease started.
         start_time: u64,
+        /// Epoch timestamp when the lease expires.
         expire_time: u64,
+        /// Subnet CIDR this lease belongs to.
         subnet: String,
     },
 
     /// Lease release notification
-    LeaseRelease { ip: String },
+    LeaseRelease {
+        /// IP address of the released lease.
+        ip: String,
+    },
 
     /// Request a full lease sync (on reconnection)
     BulkSyncRequest {
@@ -38,27 +54,44 @@ pub enum HaMessage {
     },
 
     /// A batch of leases for bulk sync
-    BulkSyncResponse { leases: Vec<LeaseSyncEntry> },
+    BulkSyncResponse {
+        /// All lease entries included in the bulk sync.
+        leases: Vec<LeaseSyncEntry>,
+    },
 
     /// State transition notification
     StateTransition {
+        /// Node that transitioned.
         node_id: String,
+        /// Previous peer state.
         from: PeerState,
+        /// New peer state.
         to: PeerState,
+        /// Epoch timestamp of the transition.
         timestamp: u64,
     },
 }
 
+/// A single lease entry used in bulk synchronization between peers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LeaseSyncEntry {
+    /// Leased IP address as a string.
     pub ip: String,
+    /// Client MAC address (colon-separated hex).
     pub mac: Option<String>,
+    /// DHCP client identifier (option 61).
     pub client_id: Option<Vec<u8>>,
+    /// Client-provided hostname.
     pub hostname: Option<String>,
+    /// Granted lease duration in seconds.
     pub lease_time: u32,
+    /// Numeric lease state (see `LeaseState`).
     pub state: u8,
+    /// Epoch timestamp when the lease started.
     pub start_time: u64,
+    /// Epoch timestamp when the lease expires.
     pub expire_time: u64,
+    /// Subnet CIDR this lease belongs to.
     pub subnet: String,
 }
 

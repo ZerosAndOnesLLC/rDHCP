@@ -1,3 +1,5 @@
+//! Write-ahead log for crash-safe lease persistence.
+
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,12 +14,20 @@ use tracing::warn;
 use crate::lease::store::LeaseStore;
 use crate::lease::types::{Lease, LeaseState};
 
+/// Errors that can occur during WAL operations.
 #[derive(Debug, Error)]
 pub enum WalError {
+    /// An I/O error occurred while reading or writing the WAL file.
     #[error("WAL I/O error: {0}")]
     Io(#[from] std::io::Error),
+    /// A corrupt entry was detected during WAL replay.
     #[error("WAL corrupt entry at offset {offset}: {reason}")]
-    Corrupt { offset: u64, reason: String },
+    Corrupt {
+        /// Byte offset where corruption was detected
+        offset: u64,
+        /// Description of the corruption
+        reason: String,
+    },
 }
 
 /// WAL entry operation types

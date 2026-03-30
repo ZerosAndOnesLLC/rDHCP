@@ -4,21 +4,37 @@ use super::packet::Dhcpv6PacketError;
 
 /// DHCPv6 option codes (RFC 8415 and related)
 pub mod code {
+    /// Client Identifier option (DUID).
     pub const CLIENT_ID: u16 = 1;
+    /// Server Identifier option (DUID).
     pub const SERVER_ID: u16 = 2;
+    /// Identity Association for Non-temporary Addresses.
     pub const IA_NA: u16 = 3;
+    /// Identity Association for Temporary Addresses.
     pub const IA_TA: u16 = 4;
+    /// IA Address option carried inside IA_NA or IA_TA.
     pub const IA_ADDR: u16 = 5;
-    pub const ORO: u16 = 6; // Option Request Option
+    /// Option Request Option -- lists option codes the client wants.
+    pub const ORO: u16 = 6;
+    /// Server preference value (0-255).
     pub const PREFERENCE: u16 = 7;
+    /// Elapsed time since the client began the current exchange (in 10ms units).
     pub const ELAPSED_TIME: u16 = 8;
+    /// Relay Message option encapsulating a relayed client/server message.
     pub const RELAY_MSG: u16 = 9;
+    /// Status Code indicating the outcome of an operation.
     pub const STATUS_CODE: u16 = 13;
+    /// Rapid Commit option for two-message exchange.
     pub const RAPID_COMMIT: u16 = 14;
+    /// DNS Recursive Name Server option (RFC 3646).
     pub const DNS_SERVERS: u16 = 23;
+    /// Domain Search List option (RFC 3646).
     pub const DOMAIN_LIST: u16 = 24;
+    /// Identity Association for Prefix Delegation (RFC 3633).
     pub const IA_PD: u16 = 25;
+    /// IA Prefix option carried inside IA_PD (RFC 3633).
     pub const IA_PREFIX: u16 = 26;
+    /// Interface-Id option used by relay agents.
     pub const INTERFACE_ID: u16 = 18;
 }
 
@@ -26,16 +42,24 @@ pub mod code {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum StatusCode {
+    /// Operation completed successfully.
     Success = 0,
+    /// Unspecified failure.
     UnspecFail = 1,
+    /// Server has no addresses available to assign.
     NoAddrsAvail = 2,
+    /// Client record (binding) unavailable.
     NoBinding = 3,
+    /// The prefix in the IA is not appropriate for the link.
     NotOnLink = 4,
+    /// Client must use the multicast All_DHCP_Relay_Agents_and_Servers address.
     UseMulticast = 5,
+    /// Server has no prefixes available to delegate.
     NoPrefixAvail = 6,
 }
 
 impl StatusCode {
+    /// Convert a raw `u16` to a status code, returning `None` for unknown values.
     pub fn from_u16(v: u16) -> Option<Self> {
         match v {
             0 => Some(Self::Success),
@@ -53,57 +77,89 @@ impl StatusCode {
 /// Identity Association for Non-temporary Addresses
 #[derive(Debug, Clone)]
 pub struct IaNa {
+    /// Identity Association Identifier chosen by the client.
     pub iaid: u32,
+    /// Seconds before the client contacts the server to extend lifetimes (T1).
     pub t1: u32,
+    /// Seconds before the client contacts any server to extend lifetimes (T2).
     pub t2: u32,
+    /// Sub-options (typically IA_ADDR and/or StatusCode).
     pub options: Vec<Dhcpv6Option>,
 }
 
 /// Identity Association for Prefix Delegation
 #[derive(Debug, Clone)]
 pub struct IaPd {
+    /// Identity Association Identifier chosen by the requesting router.
     pub iaid: u32,
+    /// Seconds before the client contacts the delegating router to extend lifetimes (T1).
     pub t1: u32,
+    /// Seconds before the client contacts any delegating router to extend lifetimes (T2).
     pub t2: u32,
+    /// Sub-options (typically IA_PREFIX and/or StatusCode).
     pub options: Vec<Dhcpv6Option>,
 }
 
 /// An address within IA_NA
 #[derive(Debug, Clone)]
 pub struct IaAddr {
+    /// The IPv6 address being offered or assigned.
     pub addr: Ipv6Addr,
+    /// Preferred lifetime in seconds.
     pub preferred_lifetime: u32,
+    /// Valid lifetime in seconds.
     pub valid_lifetime: u32,
+    /// Sub-options (e.g. StatusCode).
     pub options: Vec<Dhcpv6Option>,
 }
 
 /// A prefix within IA_PD
 #[derive(Debug, Clone)]
 pub struct IaPrefix {
+    /// Preferred lifetime in seconds.
     pub preferred_lifetime: u32,
+    /// Valid lifetime in seconds.
     pub valid_lifetime: u32,
+    /// Length of the delegated prefix in bits.
     pub prefix_len: u8,
+    /// The delegated IPv6 prefix.
     pub prefix: Ipv6Addr,
+    /// Sub-options (e.g. StatusCode).
     pub options: Vec<Dhcpv6Option>,
 }
 
 /// Parsed DHCPv6 options
 #[derive(Debug, Clone)]
 pub enum Dhcpv6Option {
+    /// Client Identifier (DUID).
     ClientId(Vec<u8>),
+    /// Server Identifier (DUID).
     ServerId(Vec<u8>),
+    /// Identity Association for Non-temporary Addresses.
     IaNa(IaNa),
+    /// IA Address carried inside an IA_NA.
     IaAddr(IaAddr),
+    /// Identity Association for Prefix Delegation.
     IaPd(IaPd),
+    /// IA Prefix carried inside an IA_PD.
     IaPrefix(IaPrefix),
+    /// Option Request Option -- list of option codes requested by the client.
     OptionRequest(Vec<u16>),
+    /// Server preference value (0-255).
     Preference(u8),
+    /// Elapsed time in hundredths of a second since the client began the exchange.
     ElapsedTime(u16),
+    /// Status code with an optional human-readable message.
     StatusCode(StatusCode, String),
+    /// Signals use of the two-message Solicit/Reply exchange.
     RapidCommit,
+    /// Recursive DNS server addresses (RFC 3646).
     DnsServers(Vec<Ipv6Addr>),
+    /// DNS domain search list (RFC 3646).
     DomainList(Vec<String>),
+    /// Encapsulated relay message bytes.
     RelayMessage(Vec<u8>),
+    /// Interface identifier set by the relay agent.
     InterfaceId(Vec<u8>),
     /// Unknown option: (code, data)
     Unknown(u16, Vec<u8>),

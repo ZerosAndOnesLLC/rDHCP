@@ -1,6 +1,14 @@
+//! High-availability module providing failover and replication backends.
+//!
+//! Supports standalone, active/active split-scope, and Raft consensus modes.
+
+/// Active/active split-scope HA backend.
 pub mod active_active;
+/// Peer-to-peer TLS transport and message framing.
 pub mod peer;
+/// Wire protocol messages exchanged between HA peers.
 pub mod protocol;
+/// Raft consensus HA backend.
 pub mod raft;
 
 use std::net::IpAddr;
@@ -35,21 +43,30 @@ pub trait HaBackend: Send + Sync {
     fn status(&self) -> HaStatus;
 }
 
+/// Errors that can occur during HA operations.
 #[derive(Debug, thiserror::Error)]
 pub enum HaError {
+    /// Quorum could not be reached (Raft mode).
     #[error("no quorum available")]
     NoQuorum,
+    /// The HA peer is unreachable.
     #[error("peer unreachable: {0}")]
     PeerUnreachable(String),
+    /// An internal HA subsystem error.
     #[error("internal HA error: {0}")]
     Internal(String),
 }
 
+/// Snapshot of the current HA status, exposed via the management API.
 #[derive(Debug, Clone)]
 pub struct HaStatus {
+    /// HA mode name (e.g. "standalone", "active-active", "raft").
     pub mode: String,
+    /// Current role of this node (e.g. "primary", "leader", "follower").
     pub role: String,
+    /// Human-readable peer state, if a peer is configured.
     pub peer_state: Option<String>,
+    /// Whether the HA subsystem considers this node healthy.
     pub healthy: bool,
 }
 

@@ -1,3 +1,5 @@
+//! Dynamic DNS (DDNS) update client implementing RFC 2136.
+
 mod dns;
 mod tsig;
 
@@ -17,12 +19,20 @@ use dns::{DnsClass, DnsMessage, DnsOpcode, DnsRcode, DnsType};
 pub enum DdnsRequest {
     /// Add records for a new/renewed lease
     Add {
+        /// IP address to create A/AAAA and PTR records for
         ip: IpAddr,
+        /// Fully qualified domain name for the forward record
         hostname: String,
+        /// Time-to-live in seconds for the DNS records
         ttl: u32,
     },
     /// Remove records for an expired/released lease
-    Remove { ip: IpAddr, hostname: String },
+    Remove {
+        /// IP address whose PTR record should be removed
+        ip: IpAddr,
+        /// Fully qualified domain name whose A/AAAA record should be removed
+        hostname: String,
+    },
 }
 
 /// DDNS update client

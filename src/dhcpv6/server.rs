@@ -27,7 +27,6 @@ const DUID_TYPE_LLT: u16 = 1;
 
 /// DHCPv6 server
 pub struct DhcpV6Server<H: HaBackend> {
-    config: Arc<Config>,
     lease_store: LeaseStore,
     allocators: Arc<HashMap<String, SubnetAllocator>>,
     wal: Arc<Wal>,
@@ -48,6 +47,7 @@ struct V6SubnetInfo {
 }
 
 impl<H: HaBackend> DhcpV6Server<H> {
+    /// Create a new DHCPv6 server, parsing IPv6 subnets from the config.
     pub fn new(
         config: Arc<Config>,
         lease_store: LeaseStore,
@@ -76,7 +76,6 @@ impl<H: HaBackend> DhcpV6Server<H> {
             .collect();
 
         Self {
-            config,
             lease_store,
             allocators,
             wal,

@@ -8,7 +8,9 @@ use super::protocol::HaMessage;
 
 /// TLS configuration for HA peer connections
 pub struct TlsConfig {
+    /// TLS connector for outbound peer connections.
     pub connector: TlsConnector,
+    /// TLS acceptor for inbound peer connections.
     pub acceptor: TlsAcceptor,
 }
 

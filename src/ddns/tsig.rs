@@ -11,9 +11,6 @@ pub struct TsigKey {
     pub secret: String,
 }
 
-/// TSIG algorithm name for wire format
-const HMAC_SHA256_NAME: &str = "hmac-sha256";
-
 /// Sign a DNS message with TSIG.
 /// Appends the TSIG RR to the additional section and increments ARCOUNT.
 pub fn sign_message(message: &mut Vec<u8>, key: &TsigKey, msg_id: u16) {
