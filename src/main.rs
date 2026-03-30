@@ -1,26 +1,16 @@
-mod allocator;
-mod api;
-mod config;
-mod ddns;
-mod ratelimit;
-mod dhcpv4;
-mod dhcpv6;
-mod ha;
-mod lease;
-mod wal;
-
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
-use api::ApiState;
-use config::Config;
-use dhcpv4::server::DhcpV4Server;
-use dhcpv6::server::{generate_server_duid, DhcpV6Server};
-use ha::StandaloneBackend;
-use lease::store::LeaseStore;
+use rdhcpd::{allocator, api, lease};
+use rdhcpd::api::ApiState;
+use rdhcpd::config::Config;
+use rdhcpd::dhcpv4::server::DhcpV4Server;
+use rdhcpd::dhcpv6::server::{generate_server_duid, DhcpV6Server};
+use rdhcpd::ha::StandaloneBackend;
+use rdhcpd::lease::store::LeaseStore;
+use rdhcpd::wal::Wal;
 use tokio::net::UdpSocket;
 use tracing::{error, info};
-use wal::Wal;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -113,10 +103,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Check if we have v6 subnets
     let has_v6 = config.subnet.iter().any(|s| s.network.contains(':'));
 
-    // Number of receive workers — scale across CPU cores
-    let worker_count = std::thread::available_parallelism()
-        .map(|n| n.get().min(8))
-        .unwrap_or(1);
+    // Number of receive workers per protocol
+    let worker_count = config.global.workers;
 
     // DHCPv4 port — default 67, override with RDHCPD_V4_PORT for benchmarking
     let dhcpv4_port: u16 = std::env::var("RDHCPD_V4_PORT")
