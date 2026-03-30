@@ -148,8 +148,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let ip = Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr));
                             // Check if this interface IP falls within any configured subnet
                             for subnet in config.subnet.iter().filter(|s| s.network.contains('.')) {
-                                if let Ok((net_addr, prefix)) = rdhcpd::config::validation::parse_cidr(&subnet.network) {
-                                    if let std::net::IpAddr::V4(net_v4) = net_addr {
+                                let cidr_parts: Vec<&str> = subnet.network.split('/').collect();
+                                if cidr_parts.len() == 2 {
+                                    if let (Ok(net_v4), Ok(prefix)) = (cidr_parts[0].parse::<Ipv4Addr>(), cidr_parts[1].parse::<u8>()) {
                                         let mask = if prefix >= 32 { u32::MAX } else { u32::MAX << (32 - prefix) };
                                         let ip_u32 = u32::from(ip);
                                         let net_u32 = u32::from(net_v4);
@@ -179,7 +180,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     }
                                 }
-                            }
+                                }
                             if bound { break; }
                         }
                     }
