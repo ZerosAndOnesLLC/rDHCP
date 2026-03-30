@@ -117,7 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start DHCPv4 server if v4 subnets configured
     let mut dhcpv4_handles = Vec::new();
     if has_v4 {
-        // Create a shared send socket for DHCP replies
+        // Create a shared send socket for DHCP replies, bound to 0.0.0.0
         let send_sock = socket2::Socket::new(
             socket2::Domain::IPV4,
             socket2::Type::DGRAM,
@@ -125,24 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ).map_err(|e| format!("failed to create DHCPv4 send socket: {}", e))?;
         send_sock.set_broadcast(true)?;
         send_sock.set_nonblocking(true)?;
-        // FreeBSD: use IP_BINDANY so we can bind to the gateway IP even if it's
-        // not assigned to this host, ensuring broadcasts go out the right interface
-        #[cfg(target_os = "freebsd")]
-        {
-            let enable: libc::c_int = 1;
-            unsafe {
-                libc::setsockopt(
-                    send_sock.as_raw_fd(),
-                    libc::IPPROTO_IP,
-                    24, // IP_BINDANY
-                    &enable as *const _ as *const libc::c_void,
-                    std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-                );
-            }
-        }
-        let send_bind: std::net::SocketAddr = format!("{}:0", server_ip).parse().unwrap();
-        send_sock.bind(&send_bind.into())
-            .or_else(|_| send_sock.bind(&"0.0.0.0:0".parse::<std::net::SocketAddr>().unwrap().into()))?;
+        send_sock.bind(&"0.0.0.0:0".parse::<std::net::SocketAddr>().unwrap().into())?;
         let send_socket = Arc::new(UdpSocket::from_std(send_sock.into())?);
 
         for worker_id in 0..worker_count {
