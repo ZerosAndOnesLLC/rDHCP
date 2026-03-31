@@ -103,6 +103,12 @@ pub struct SubnetConfig {
     /// Lease duration in seconds.
     #[serde(default = "default_lease_time")]
     pub lease_time: u32,
+    /// Maximum lease time a client can request (0 = no cap).
+    pub max_lease_time: Option<u32>,
+    /// Renewal time (T1) in seconds. Default: 50% of lease_time.
+    pub renewal_time: Option<u32>,
+    /// Rebinding time (T2) in seconds. Default: 87.5% of lease_time.
+    pub rebinding_time: Option<u32>,
     /// DHCPv6 preferred lifetime
     pub preferred_time: Option<u32>,
     /// Subnet type: "address" (default) or "prefix-delegation"

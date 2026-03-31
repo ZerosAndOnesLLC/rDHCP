@@ -627,9 +627,11 @@ impl<H: HaBackend> DhcpV4Server<H> {
         opts.push(DhcpOption::LeaseTime(subnet.config.lease_time));
         opts.push(DhcpOption::SubnetMask(prefix_to_mask(subnet.prefix_len)));
 
-        // T1 = 50% lease time, T2 = 87.5% lease time
-        let t1 = subnet.config.lease_time / 2;
-        let t2 = (subnet.config.lease_time as u64 * 7 / 8) as u32;
+        // T1 = configurable or 50% lease time, T2 = configurable or 87.5% lease time
+        let t1 = subnet.config.renewal_time
+            .unwrap_or(subnet.config.lease_time / 2);
+        let t2 = subnet.config.rebinding_time
+            .unwrap_or((subnet.config.lease_time as u64 * 7 / 8) as u32);
         opts.push(DhcpOption::RenewalTime(t1));
         opts.push(DhcpOption::RebindingTime(t2));
 
