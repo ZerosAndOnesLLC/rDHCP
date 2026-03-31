@@ -548,12 +548,13 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
 name = "rdhcpd"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "axum",
  "byteorder",
  "crc32fast",
  "dashmap",
+ "libc",
  "nix",
  "rustls",
  "rustls-pemfile",

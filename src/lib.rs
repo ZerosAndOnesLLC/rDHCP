@@ -21,6 +21,8 @@
 
 pub mod allocator;
 pub mod api;
+#[cfg(target_os = "freebsd")]
+pub mod bpf;
 pub mod config;
 pub mod ddns;
 pub mod dhcpv4;

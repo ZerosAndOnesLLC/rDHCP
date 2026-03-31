@@ -16,6 +16,23 @@ use crate::lease::store::LeaseStore;
 use crate::lease::types::{Lease, LeaseState};
 use crate::wal::Wal;
 
+// ---------------------------------------------------------------------------
+// DhcpSender — abstraction over UDP socket vs BPF raw-frame send
+// ---------------------------------------------------------------------------
+
+/// How to send DHCP reply frames on the wire.
+///
+/// On FreeBSD we prefer BPF raw frames so we can unicast directly to the
+/// client's MAC address without requiring an ARP entry.  On other platforms
+/// (or if BPF is unavailable) we fall back to the kernel's UDP stack.
+pub enum DhcpSender {
+    /// Standard kernel UDP socket (works everywhere).
+    Udp(Arc<UdpSocket>),
+    /// BPF raw-frame injection (FreeBSD only).
+    #[cfg(target_os = "freebsd")]
+    Bpf(Arc<crate::bpf::BpfSender>),
+}
+
 /// Duration to hold an Offer before it expires (seconds)
 const OFFER_HOLD_TIME: u64 = 30;
 
@@ -83,9 +100,14 @@ impl<H: HaBackend> DhcpV4Server<H> {
     }
 
     /// Run the DHCPv4 server loop.
-    /// `recv_socket` is used to receive DHCP requests (may be bound to broadcast addr on FreeBSD).
-    /// `send_socket` is used to send DHCP replies (bound to the server's IP or 0.0.0.0).
-    pub async fn run(&self, recv_socket: Arc<UdpSocket>, send_socket: Arc<UdpSocket>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    ///
+    /// `recv_socket` receives DHCP requests (may be bound to broadcast addr on FreeBSD).
+    /// `sender` dispatches replies — either via a kernel UDP socket or BPF raw frames.
+    pub async fn run(
+        &self,
+        recv_socket: Arc<UdpSocket>,
+        sender: Arc<DhcpSender>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut recv_buf = [0u8; MAX_PACKET_SIZE];
 
         info!(addr = %recv_socket.local_addr()?, "DHCPv4 server listening");
@@ -143,16 +165,22 @@ impl<H: HaBackend> DhcpV4Server<H> {
 
             match result {
                 Ok(Some(reply)) => {
-                    let dest = self.reply_destination(&packet, &reply, src_addr);
                     let mut send_buf = [0u8; MAX_PACKET_SIZE];
                     let send_len = reply.serialize(&mut send_buf);
 
-                    if let Err(e) = send_socket.send_to(&send_buf[..send_len], dest).await {
-                        error!(error = %e, dest = %dest, "failed to send reply");
+                    let send_result = self.send_reply(
+                        &sender,
+                        &send_buf[..send_len],
+                        &packet,
+                        &reply,
+                        src_addr,
+                    );
+
+                    if let Err(e) = send_result {
+                        error!(error = %e, "failed to send reply");
                     } else {
                         debug!(
                             msg_type = ?reply.message_type(),
-                            dest = %dest,
                             yiaddr = %reply.yiaddr,
                             "sent reply"
                         );
@@ -162,6 +190,41 @@ impl<H: HaBackend> DhcpV4Server<H> {
                 Err(e) => {
                     warn!(error = %e, xid = packet.xid, "error handling packet");
                 }
+            }
+        }
+    }
+
+    /// Send a serialized DHCP reply via the configured sender.
+    ///
+    /// For BPF: determines the correct destination MAC (client's chaddr for
+    /// unicast, or ff:ff:ff:ff:ff:ff for broadcast) and destination IP, then
+    /// injects a raw Ethernet frame.
+    ///
+    /// For UDP: falls back to `send_to()` with the standard reply-destination
+    /// logic (RFC 2131 §4.1).
+    fn send_reply(
+        &self,
+        sender: &DhcpSender,
+        payload: &[u8],
+        request: &DhcpV4Packet,
+        reply: &DhcpV4Packet,
+        src_addr: SocketAddr,
+    ) -> std::io::Result<()> {
+        match sender {
+            #[cfg(target_os = "freebsd")]
+            DhcpSender::Bpf(bpf) => {
+                let (dest_mac, dest_ip) =
+                    self.bpf_reply_destination(request, reply, src_addr);
+                bpf.send_dhcp(payload, dest_mac, dest_ip)?;
+                Ok(())
+            }
+            DhcpSender::Udp(sock) => {
+                let dest = self.reply_destination(request, reply, src_addr);
+                // UdpSocket::send_to is sync-safe when the socket is non-blocking
+                // and the buffer is small.  We call the std (blocking) send_to
+                // which is fine for a single DHCP-sized datagram.
+                sock.try_send_to(payload, dest)?;
+                Ok(())
             }
         }
     }
@@ -663,7 +726,7 @@ impl<H: HaBackend> DhcpV4Server<H> {
         })
     }
 
-    /// Determine the destination address for a reply (RFC 2131 §4.1).
+    /// Determine the destination address for a UDP reply (RFC 2131 §4.1).
     fn reply_destination(
         &self,
         request: &DhcpV4Packet,
@@ -685,6 +748,37 @@ impl<H: HaBackend> DhcpV4Server<H> {
         } else {
             // Unicast to client's source address
             src_addr
+        }
+    }
+
+    /// Determine the destination MAC and IP for a BPF raw-frame reply.
+    ///
+    /// Unlike the UDP path, BPF can unicast directly to the client's MAC
+    /// without needing an ARP entry — this is the primary advantage.
+    ///
+    /// Returns `(dest_mac, dest_ip)`.
+    #[cfg(target_os = "freebsd")]
+    fn bpf_reply_destination(
+        &self,
+        request: &DhcpV4Packet,
+        reply: &DhcpV4Packet,
+        _src_addr: SocketAddr,
+    ) -> ([u8; 6], Ipv4Addr) {
+        if request.is_relayed() && self.is_known_relay(request.giaddr) {
+            // Relayed: send to relay agent's IP.  We don't know the relay's
+            // MAC here, so broadcast to ensure delivery. The relay is on the
+            // local segment and will forward via its own interface.
+            (crate::bpf::BROADCAST_ETH, request.giaddr)
+        } else if !request.ciaddr.is_unspecified() {
+            // Renew/rebind: unicast to client's known IP and MAC.
+            (request.mac(), request.ciaddr)
+        } else if request.wants_broadcast() || reply.yiaddr.is_unspecified() {
+            // Client requests broadcast, or NAK (no yiaddr).
+            (crate::bpf::BROADCAST_ETH, Ipv4Addr::BROADCAST)
+        } else {
+            // New client with no IP yet — this is where BPF shines:
+            // unicast the reply directly to the client's MAC at yiaddr.
+            (request.mac(), reply.yiaddr)
         }
     }
 

@@ -5,13 +5,18 @@ use std::sync::Arc;
 
 use rdhcpd::{allocator, api, lease};
 use rdhcpd::api::ApiState;
+#[cfg(target_os = "freebsd")]
+use rdhcpd::bpf::BpfSender;
 use rdhcpd::config::Config;
-use rdhcpd::dhcpv4::server::DhcpV4Server;
+use rdhcpd::dhcpv4::server::{DhcpSender, DhcpV4Server};
 use rdhcpd::dhcpv6::server::{generate_server_duid, DhcpV6Server};
 use rdhcpd::ha::StandaloneBackend;
 use rdhcpd::lease::store::LeaseStore;
 use rdhcpd::wal::Wal;
 use tokio::net::UdpSocket;
+#[cfg(target_os = "freebsd")]
+use tracing::{error, info, warn};
+#[cfg(not(target_os = "freebsd"))]
 use tracing::{error, info};
 
 #[tokio::main]
@@ -117,27 +122,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start DHCPv4 server if v4 subnets configured
     let mut dhcpv4_handles = Vec::new();
     if has_v4 {
-        // Create a shared send socket for DHCP replies
-        // Bind to port 67 so replies have correct source port, use SO_REUSEPORT
-        let send_sock = socket2::Socket::new(
-            socket2::Domain::IPV4,
-            socket2::Type::DGRAM,
-            Some(socket2::Protocol::UDP),
-        ).map_err(|e| format!("failed to create DHCPv4 send socket: {}", e))?;
-        send_sock.set_reuse_port(true)?;
-        send_sock.set_broadcast(true)?;
-        send_sock.set_nonblocking(true)?;
-
-        // Find the local IP on the DHCP subnet's interface and bind the send
-        // socket to it. This ensures broadcast replies go out the correct interface
-        // (kernel routes based on source IP). Falls back to 0.0.0.0 if not found.
+        // -----------------------------------------------------------------
+        // Detect the network interface that serves our DHCP subnet.
+        // On FreeBSD we also capture the interface name and MAC address so
+        // we can open a BPF device for raw-frame replies.
+        // -----------------------------------------------------------------
+        #[cfg(not(target_os = "freebsd"))]
+        let send_bind_ip = Ipv4Addr::UNSPECIFIED;
+        #[cfg(target_os = "freebsd")]
         let mut send_bind_ip = Ipv4Addr::UNSPECIFIED;
+        #[cfg(target_os = "freebsd")]
+        let mut detected_iface: Option<String> = None;
+        #[cfg(target_os = "freebsd")]
+        let mut detected_mac: Option<[u8; 6]> = None;
+
         #[cfg(target_os = "freebsd")]
         {
             let mut ifaddrs_ptr: *mut libc::ifaddrs = std::ptr::null_mut();
             if unsafe { libc::getifaddrs(&mut ifaddrs_ptr) } == 0 {
+                // First pass: find the interface + IP that matches a v4 subnet.
                 let mut cur = ifaddrs_ptr;
-                'outer: while !cur.is_null() {
+                while !cur.is_null() {
                     let ifa = unsafe { &*cur };
                     if !ifa.ifa_addr.is_null() {
                         let sa = unsafe { &*ifa.ifa_addr };
@@ -150,15 +155,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     if let (Ok(net_v4), Ok(prefix)) = (cidr_parts[0].parse::<Ipv4Addr>(), cidr_parts[1].parse::<u8>()) {
                                         let mask = if prefix >= 32 { u32::MAX } else { u32::MAX << (32 - prefix) };
                                         if (u32::from(ip) & mask) == (u32::from(net_v4) & mask) {
-                                            let iface_name = unsafe { std::ffi::CStr::from_ptr(ifa.ifa_name) };
+                                            let iface_name = unsafe { std::ffi::CStr::from_ptr(ifa.ifa_name) }
+                                                .to_string_lossy()
+                                                .into_owned();
                                             info!(
-                                                interface = %iface_name.to_string_lossy(),
+                                                interface = %iface_name,
                                                 ip = %ip,
                                                 subnet = %subnet.network,
-                                                "binding send socket to interface IP"
+                                                "detected DHCP interface"
                                             );
                                             send_bind_ip = ip;
-                                            break 'outer;
+                                            detected_iface = Some(iface_name);
                                         }
                                     }
                                 }
@@ -166,21 +173,91 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     cur = unsafe { (*cur).ifa_next };
+                    if detected_iface.is_some() {
+                        break;
+                    }
                 }
+
+                // Second pass: find the AF_LINK (MAC) entry for that interface.
+                if let Some(ref iface_name) = detected_iface {
+                    cur = ifaddrs_ptr;
+                    while !cur.is_null() {
+                        let ifa = unsafe { &*cur };
+                        if !ifa.ifa_addr.is_null() {
+                            let sa = unsafe { &*ifa.ifa_addr };
+                            if sa.sa_family == libc::AF_LINK as u8 {
+                                let name = unsafe { std::ffi::CStr::from_ptr(ifa.ifa_name) }
+                                    .to_string_lossy();
+                                if name == iface_name.as_str() {
+                                    let sdl = unsafe {
+                                        &*(ifa.ifa_addr as *const libc::sockaddr_dl)
+                                    };
+                                    if sdl.sdl_alen == 6 {
+                                        let mac_ptr = unsafe {
+                                            (sdl as *const libc::sockaddr_dl as *const u8)
+                                                .add(sdl.sdl_nlen as usize
+                                                    + std::mem::offset_of!(libc::sockaddr_dl, sdl_data))
+                                        };
+                                        let mut mac = [0u8; 6];
+                                        unsafe {
+                                            std::ptr::copy_nonoverlapping(mac_ptr, mac.as_mut_ptr(), 6);
+                                        }
+                                        info!(
+                                            interface = %iface_name,
+                                            mac = %format!(
+                                                "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                                                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+                                            ),
+                                            "detected interface MAC"
+                                        );
+                                        detected_mac = Some(mac);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        cur = unsafe { (*cur).ifa_next };
+                    }
+                }
+
                 unsafe { libc::freeifaddrs(ifaddrs_ptr); }
             }
         }
 
-        let send_bind_addr: std::net::SocketAddr = format!("{}:{}", send_bind_ip, dhcpv4_port).parse().unwrap();
-        send_sock.bind(&send_bind_addr.into())
-            .or_else(|_| {
-                info!("could not bind send socket to {}, falling back to 0.0.0.0", send_bind_ip);
-                send_sock.bind(&format!("0.0.0.0:{}", dhcpv4_port).parse::<std::net::SocketAddr>().unwrap().into())
-            })?;
-        let send_socket = Arc::new(UdpSocket::from_std(send_sock.into())?);
+        // -----------------------------------------------------------------
+        // Build the DhcpSender: prefer BPF on FreeBSD, fall back to UDP.
+        // -----------------------------------------------------------------
+        #[cfg(target_os = "freebsd")]
+        let sender: Arc<DhcpSender> = {
+            match (&detected_iface, &detected_mac) {
+                (Some(iface), Some(mac)) => {
+                    match BpfSender::open(iface, *mac, send_bind_ip) {
+                        Ok(bpf) => {
+                            info!("using BPF raw-frame sender for DHCPv4 replies");
+                            Arc::new(DhcpSender::Bpf(Arc::new(bpf)))
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "BPF open failed, falling back to UDP sender");
+                            Arc::new(DhcpSender::Udp(build_udp_send_socket(send_bind_ip, dhcpv4_port)?))
+                        }
+                    }
+                }
+                _ => {
+                    warn!("could not detect interface/MAC, falling back to UDP sender");
+                    Arc::new(DhcpSender::Udp(build_udp_send_socket(send_bind_ip, dhcpv4_port)?))
+                }
+            }
+        };
 
+        #[cfg(not(target_os = "freebsd"))]
+        let sender: Arc<DhcpSender> = Arc::new(DhcpSender::Udp(
+            build_udp_send_socket(send_bind_ip, dhcpv4_port)?,
+        ));
+
+        // -----------------------------------------------------------------
+        // Spawn receive workers
+        // -----------------------------------------------------------------
         for worker_id in 0..worker_count {
-            // Receive socket — platform-specific binding
             let recv_sock = socket2::Socket::new(
                 socket2::Domain::IPV4,
                 socket2::Type::DGRAM,
@@ -225,9 +302,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 server_ip,
             );
 
-            let worker_send = send_socket.clone();
+            let worker_sender = sender.clone();
             dhcpv4_handles.push(tokio::spawn(async move {
-                if let Err(e) = dhcpv4_server.run(recv_socket, worker_send).await {
+                if let Err(e) = dhcpv4_server.run(recv_socket, worker_sender).await {
                     error!(error = %e, worker = worker_id, "DHCPv4 server error");
                 }
             }));
@@ -331,4 +408,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("WAL flushed, goodbye");
 
     Ok(())
+}
+
+/// Create a UDP send socket for DHCPv4 replies (fallback when BPF is unavailable).
+fn build_udp_send_socket(
+    bind_ip: Ipv4Addr,
+    port: u16,
+) -> Result<Arc<UdpSocket>, Box<dyn std::error::Error>> {
+    let sock = socket2::Socket::new(
+        socket2::Domain::IPV4,
+        socket2::Type::DGRAM,
+        Some(socket2::Protocol::UDP),
+    )
+    .map_err(|e| format!("failed to create DHCPv4 send socket: {}", e))?;
+    sock.set_reuse_port(true)?;
+    sock.set_broadcast(true)?;
+    sock.set_nonblocking(true)?;
+
+    let addr: std::net::SocketAddr = format!("{}:{}", bind_ip, port).parse().unwrap();
+    sock.bind(&addr.into()).or_else(|_| {
+        info!(
+            "could not bind send socket to {}, falling back to 0.0.0.0",
+            bind_ip
+        );
+        sock.bind(
+            &format!("0.0.0.0:{}", port)
+                .parse::<std::net::SocketAddr>()
+                .unwrap()
+                .into(),
+        )
+    })?;
+
+    Ok(Arc::new(UdpSocket::from_std(sock.into())?))
 }
