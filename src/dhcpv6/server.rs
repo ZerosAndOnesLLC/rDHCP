@@ -16,6 +16,7 @@ use crate::config::{Config, SubnetConfig};
 use crate::ha::HaBackend;
 use crate::lease::store::LeaseStore;
 use crate::lease::types::{Lease, LeaseState};
+use crate::ratelimit::{GlobalRateLimiter, RateLimiter, RogueDetector};
 use crate::wal::Wal;
 
 /// Maximum DHCPv6 packet size
@@ -35,6 +36,12 @@ pub struct DhcpV6Server<H: HaBackend> {
     server_duid: Vec<u8>,
     /// Parsed v6 subnet info
     subnets: Vec<V6SubnetInfo>,
+    /// Per-client rate limiter (keyed by DUID)
+    rate_limiter: Arc<RateLimiter>,
+    /// Global rate limiter (None if disabled)
+    global_rate_limiter: Option<Arc<GlobalRateLimiter>>,
+    /// Rogue client detector
+    rogue_detector: Arc<RogueDetector>,
 }
 
 #[derive(Clone)]
@@ -55,6 +62,9 @@ impl<H: HaBackend> DhcpV6Server<H> {
         wal: Arc<Wal>,
         ha: Arc<H>,
         server_duid: Vec<u8>,
+        rate_limiter: Arc<RateLimiter>,
+        global_rate_limiter: Option<Arc<GlobalRateLimiter>>,
+        rogue_detector: Arc<RogueDetector>,
     ) -> Self {
         let subnets: Vec<V6SubnetInfo> = config
             .subnet
@@ -82,6 +92,9 @@ impl<H: HaBackend> DhcpV6Server<H> {
             ha,
             server_duid,
             subnets,
+            rate_limiter,
+            global_rate_limiter,
+            rogue_detector,
         }
     }
 
@@ -107,6 +120,14 @@ impl<H: HaBackend> DhcpV6Server<H> {
 
             if data.is_empty() {
                 continue;
+            }
+
+            // Global rate limiting
+            if let Some(ref global_rl) = self.global_rate_limiter {
+                if !global_rl.check() {
+                    debug!("DHCPv6 packet dropped by global rate limiter");
+                    continue;
+                }
             }
 
             // Check if this is a relay message
@@ -140,6 +161,17 @@ impl<H: HaBackend> DhcpV6Server<H> {
         src_addr: SocketAddr,
     ) -> Result<Option<(Vec<u8>, SocketAddr)>, Box<dyn std::error::Error + Send + Sync>> {
         let msg = Dhcpv6Message::parse(data)?;
+
+        // Per-client rate limiting using DUID
+        if let Some(client_id) = msg.client_id() {
+            if !self.rate_limiter.check(client_id) {
+                debug!("DHCPv6 packet dropped by per-client rate limiter");
+                return Ok(None);
+            }
+            let label = client_id.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+            self.rogue_detector.record(client_id, &label);
+        }
+
         debug!(
             msg_type = ?msg.msg_type,
             "received DHCPv6 {:?}",

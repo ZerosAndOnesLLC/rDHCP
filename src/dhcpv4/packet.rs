@@ -276,6 +276,17 @@ impl DhcpV4Packet {
         })
     }
 
+    /// Get the requested lease time (option 51)
+    pub fn requested_lease_time(&self) -> Option<u32> {
+        self.options.iter().find_map(|o| {
+            if let DhcpOption::LeaseTime(t) = o {
+                Some(*t)
+            } else {
+                None
+            }
+        })
+    }
+
     /// Get relay agent info (option 82)
     pub fn relay_agent_info(&self) -> Option<&[u8]> {
         self.options.iter().find_map(|o| {

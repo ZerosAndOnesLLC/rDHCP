@@ -16,7 +16,8 @@
 //! - [`dhcpv6`] — DHCPv6 protocol implementation (RFC 8415)
 //! - [`ha`] — High availability backends (standalone, active/active, Raft)
 //! - [`lease`] — Lease storage, indexing, and expiry
-//! - [`ratelimit`] — Per-client rate limiting and MAC ACL
+//! - [`probe`] — Duplicate IP detection via network probes
+//! - [`ratelimit`] — Per-client/global rate limiting, MAC ACL, rogue detection
 //! - [`wal`] — Write-ahead log for durability
 
 pub mod allocator;
@@ -29,5 +30,6 @@ pub mod dhcpv4;
 pub mod dhcpv6;
 pub mod ha;
 pub mod lease;
+pub mod probe;
 pub mod ratelimit;
 pub mod wal;

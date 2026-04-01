@@ -1,9 +1,12 @@
-//! Per-client rate limiting and MAC-based access control.
+//! Per-client rate limiting, global rate limiting, MAC-based access control,
+//! and rogue client detection.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
+use tracing::warn;
 
 /// Per-client rate limiter using token bucket algorithm.
 /// Keyed by MAC address (6 bytes) for DHCPv4 or client DUID for DHCPv6.
@@ -95,6 +98,42 @@ impl RateLimiter {
     }
 }
 
+/// Global (non-keyed) rate limiter using token bucket.
+/// Limits total packets per second across all clients.
+pub struct GlobalRateLimiter {
+    max_tokens: f64,
+    refill_rate: f64,
+    tokens: Mutex<(f64, Instant)>,
+}
+
+impl GlobalRateLimiter {
+    /// Create a new global rate limiter.
+    /// - `pps`: maximum sustained packets per second (also used as burst size)
+    pub fn new(pps: f64) -> Self {
+        Self {
+            max_tokens: pps * 2.0, // allow 2-second burst
+            refill_rate: pps,
+            tokens: Mutex::new((pps * 2.0, Instant::now())),
+        }
+    }
+
+    /// Check if a packet should be allowed globally. Returns `true` if allowed.
+    pub fn check(&self) -> bool {
+        let mut guard = self.tokens.lock().unwrap();
+        let (ref mut tokens, ref mut last) = *guard;
+        let now = Instant::now();
+        let elapsed = now.duration_since(*last).as_secs_f64();
+        *tokens = (*tokens + elapsed * self.refill_rate).min(self.max_tokens);
+        *last = now;
+        if *tokens >= 1.0 {
+            *tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// MAC-based access control list
 pub struct MacAcl {
     /// Allow list (if non-empty, only these MACs are allowed)
@@ -107,6 +146,19 @@ impl MacAcl {
     /// Create a new ACL with the given allow and deny lists.
     pub fn new(allow: Vec<[u8; 6]>, deny: Vec<[u8; 6]>) -> Self {
         Self { allow, deny }
+    }
+
+    /// Create an empty ACL that permits everything.
+    pub fn allow_all() -> Self {
+        Self {
+            allow: Vec::new(),
+            deny: Vec::new(),
+        }
+    }
+
+    /// Returns true if both allow and deny lists are empty (permits everything).
+    pub fn is_empty(&self) -> bool {
+        self.allow.is_empty() && self.deny.is_empty()
     }
 
     /// Check if a MAC address is allowed
@@ -123,5 +175,80 @@ impl MacAcl {
 
         // If allow list is non-empty, only allow listed MACs
         self.allow.contains(mac)
+    }
+}
+
+/// Rogue client detector — tracks per-client request rates and alerts on anomalies.
+pub struct RogueDetector {
+    /// Threshold: max requests per client within the window
+    threshold: u32,
+    /// Window duration
+    window: Duration,
+    /// Per-client counters: client_id -> (count, window_start)
+    counters: DashMap<Vec<u8>, (u32, Instant)>,
+    /// Cleanup tracking
+    last_cleanup: Mutex<Instant>,
+    /// Counter of detected anomalies (for metrics)
+    anomaly_count: AtomicU64,
+}
+
+impl RogueDetector {
+    /// Create a new rogue detector.
+    /// - `threshold`: max requests per window before alerting
+    /// - `window_secs`: sliding window duration in seconds
+    pub fn new(threshold: u32, window_secs: u64) -> Self {
+        Self {
+            threshold,
+            window: Duration::from_secs(window_secs),
+            counters: DashMap::new(),
+            last_cleanup: Mutex::new(Instant::now()),
+            anomaly_count: AtomicU64::new(0),
+        }
+    }
+
+    /// Record a request from a client. Returns `true` if the client is behaving
+    /// normally, `false` if rogue behavior is detected (over threshold).
+    /// Logs a warning on first threshold crossing per window.
+    pub fn record(&self, client_id: &[u8], label: &str) -> bool {
+        let now = Instant::now();
+
+        // Periodic cleanup
+        {
+            let mut last = self.last_cleanup.lock().unwrap();
+            if now.duration_since(*last) > Duration::from_secs(30) {
+                *last = now;
+                self.counters
+                    .retain(|_, (_, start)| now.duration_since(*start) < self.window * 2);
+            }
+        }
+
+        let mut entry = self.counters.entry(client_id.to_vec()).or_insert((0, now));
+        let (ref mut count, ref mut window_start) = *entry.value_mut();
+
+        // Reset window if expired
+        if now.duration_since(*window_start) > self.window {
+            *count = 0;
+            *window_start = now;
+        }
+
+        *count += 1;
+
+        if *count == self.threshold {
+            self.anomaly_count.fetch_add(1, Ordering::Relaxed);
+            warn!(
+                client = %label,
+                requests = *count,
+                window_secs = self.window.as_secs(),
+                "rogue client detected: request rate exceeds threshold"
+            );
+            return false;
+        }
+
+        *count < self.threshold
+    }
+
+    /// Number of anomalies detected since startup.
+    pub fn anomaly_count(&self) -> u64 {
+        self.anomaly_count.load(Ordering::Relaxed)
     }
 }

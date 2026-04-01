@@ -12,12 +12,10 @@ use rdhcpd::dhcpv4::server::{DhcpSender, DhcpV4Server};
 use rdhcpd::dhcpv6::server::{generate_server_duid, DhcpV6Server};
 use rdhcpd::ha::StandaloneBackend;
 use rdhcpd::lease::store::LeaseStore;
+use rdhcpd::ratelimit::{GlobalRateLimiter, RateLimiter, RogueDetector};
 use rdhcpd::wal::Wal;
 use tokio::net::UdpSocket;
-#[cfg(target_os = "freebsd")]
 use tracing::{error, info, warn};
-#[cfg(not(target_os = "freebsd"))]
-use tracing::{error, info};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -63,6 +61,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // TODO: select based on config.ha (active-active / raft)
     let ha: Arc<StandaloneBackend> = Arc::new(StandaloneBackend);
 
+    // Initialize security: rate limiters and rogue detector
+    let rate_limiter = Arc::new(RateLimiter::new(
+        config.global.rate_limit_burst,
+        config.global.rate_limit_pps,
+    ));
+    let global_rate_limiter = if config.global.global_rate_limit_pps > 0.0 {
+        Some(Arc::new(GlobalRateLimiter::new(
+            config.global.global_rate_limit_pps,
+        )))
+    } else {
+        None
+    };
+    let rogue_detector = Arc::new(RogueDetector::new(
+        config.global.rogue_threshold,
+        config.global.rogue_window_secs,
+    ));
+    info!(
+        rate_limit_burst = config.global.rate_limit_burst,
+        rate_limit_pps = config.global.rate_limit_pps,
+        global_rate_limit = config.global.global_rate_limit_pps,
+        rogue_threshold = config.global.rogue_threshold,
+        "security: rate limiting and rogue detection initialized"
+    );
+
     let config = Arc::new(config);
 
     // Start lease expiry background task
@@ -73,6 +95,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Start management API if configured
     let api_handle = if let Some(ref api_config) = config.api {
+        // Warn if API is bound to a non-loopback address without authentication
+        if api_config.api_key.is_none() {
+            let addr = &api_config.listen;
+            let is_loopback = addr.starts_with("127.") || addr.starts_with("localhost") || addr.starts_with("[::1]");
+            if !is_loopback {
+                warn!(
+                    listen = %addr,
+                    "API is bound to a non-loopback address without an API key — lease data is world-readable"
+                );
+            }
+        }
+
         let api_state = Arc::new(ApiState {
             lease_store: lease_store.clone(),
             allocators: allocators.clone(),
@@ -300,6 +334,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 wal.clone(),
                 ha.clone(),
                 server_ip,
+                rate_limiter.clone(),
+                global_rate_limiter.clone(),
+                rogue_detector.clone(),
             );
 
             let worker_sender = sender.clone();
@@ -341,6 +378,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 wal.clone(),
                 ha.clone(),
                 server_duid.to_vec(),
+                rate_limiter.clone(),
+                global_rate_limiter.clone(),
+                rogue_detector.clone(),
             );
 
             dhcpv6_handles.push(tokio::spawn(async move {

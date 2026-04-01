@@ -6,6 +6,10 @@ mod metrics;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use axum::extract::State;
+use axum::http::{Request, StatusCode};
+use axum::middleware::{self, Next};
+use axum::response::Response;
 use axum::routing::{delete, get};
 use axum::Router;
 use tokio::net::TcpListener;
@@ -25,6 +29,33 @@ pub struct ApiState<H: HaBackend> {
     pub ha: Arc<H>,
     /// Optional API key for authenticating management requests
     pub api_key: Option<String>,
+}
+
+/// Authentication middleware — checks X-API-Key header against configured key.
+/// Health and metrics endpoints are exempt.
+async fn auth_middleware<H: HaBackend>(
+    State(state): State<Arc<ApiState<H>>>,
+    req: Request<axum::body::Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    // Skip auth for health checks and metrics
+    let path = req.uri().path();
+    if path == "/health" || path == "/healthz" || path == "/metrics" {
+        return Ok(next.run(req).await);
+    }
+
+    // If no API key configured, allow everything
+    let Some(ref expected_key) = state.api_key else {
+        return Ok(next.run(req).await);
+    };
+
+    // Check X-API-Key header
+    match req.headers().get("x-api-key") {
+        Some(provided) if provided.as_bytes() == expected_key.as_bytes() => {
+            Ok(next.run(req).await)
+        }
+        _ => Err(StatusCode::UNAUTHORIZED),
+    }
 }
 
 /// Start the management API server
@@ -50,6 +81,11 @@ pub async fn start<H: HaBackend + 'static>(
         .route("/healthz", get(handlers::health_check::<H>))
         // Metrics
         .route("/metrics", get(metrics::metrics_handler::<H>))
+        // Authentication middleware
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware::<H>,
+        ))
         .with_state(state);
 
     let listener = TcpListener::bind(listen_addr).await?;

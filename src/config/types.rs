@@ -32,6 +32,24 @@ pub struct GlobalConfig {
     /// Number of receive workers per protocol (DHCPv4/v6).
     #[serde(default = "default_workers")]
     pub workers: usize,
+    /// Per-client rate limit: maximum burst size (packets).
+    #[serde(default = "default_rate_limit_burst")]
+    pub rate_limit_burst: u32,
+    /// Per-client rate limit: sustained packets per second.
+    #[serde(default = "default_rate_limit_pps")]
+    pub rate_limit_pps: f64,
+    /// Global (all clients) rate limit: packets per second. 0 = disabled.
+    #[serde(default)]
+    pub global_rate_limit_pps: f64,
+    /// Rogue client detection: max requests per MAC in a sliding window before warning.
+    #[serde(default = "default_rogue_threshold")]
+    pub rogue_threshold: u32,
+    /// Rogue detection sliding window in seconds.
+    #[serde(default = "default_rogue_window_secs")]
+    pub rogue_window_secs: u64,
+    /// Pool utilization high-water mark (0.0-1.0) for alerting.
+    #[serde(default = "default_pool_high_water")]
+    pub pool_high_water: f64,
 }
 
 /// REST API server configuration.
@@ -125,6 +143,22 @@ pub struct SubnetConfig {
     pub dns: Vec<String>,
     /// DNS domain name for clients.
     pub domain: Option<String>,
+
+    // Security
+    /// Enable duplicate IP detection via probe before offering (default: false).
+    #[serde(default)]
+    pub ip_probe: bool,
+    /// Probe timeout in milliseconds (default: 500).
+    pub ip_probe_timeout_ms: Option<u64>,
+    /// Maximum active leases per MAC address (0 = unlimited, default: 1).
+    #[serde(default = "default_max_leases_per_mac")]
+    pub max_leases_per_mac: u32,
+    /// MAC allow list (if non-empty, only these MACs get leases).
+    #[serde(default)]
+    pub mac_allow: Vec<String>,
+    /// MAC deny list (these MACs are always rejected).
+    #[serde(default)]
+    pub mac_deny: Vec<String>,
 
     // Reservations
     /// Static address reservations for specific clients.
@@ -269,4 +303,28 @@ fn default_subnet_type() -> String {
 
 fn default_ddns_ttl() -> u32 {
     300
+}
+
+fn default_rate_limit_burst() -> u32 {
+    10
+}
+
+fn default_rate_limit_pps() -> f64 {
+    5.0
+}
+
+fn default_rogue_threshold() -> u32 {
+    50
+}
+
+fn default_rogue_window_secs() -> u64 {
+    60
+}
+
+fn default_pool_high_water() -> f64 {
+    0.9
+}
+
+fn default_max_leases_per_mac() -> u32 {
+    1
 }
