@@ -46,11 +46,9 @@ Key design choices behind these numbers:
 - **Prefix Delegation** — DHCPv6 IA_PD with configurable delegated prefix lengths
 - **Relay Support** — Option 82 (DHCPv4), Relay-forward/reply (DHCPv6) with hop count validation
 - **DDNS** — RFC 2136 dynamic DNS updates with TSIG (HMAC-SHA256) authentication
-- **REST API** — Lease/subnet CRUD, pool utilization stats, HA status
+- **REST API** — Lease/subnet CRUD, pool utilization stats, HA status, with API key authentication
 - **Prometheus Metrics** — Pool utilization, lease state counters, HA health
-- **Rate Limiting** — Per-client token bucket to prevent DHCP starvation attacks
-- **MAC ACLs** — Allow/deny lists per subnet
-- **Security** — mTLS for HA peer communication (rustls, no OpenSSL)
+- **Security Hardening** — Rate limiting, MAC ACLs, rogue client detection, duplicate IP probing, max lease enforcement (see [Security](#security) section)
 - **Operational** — SIGHUP config reload, systemd integration, structured JSON logging
 
 ## Quick Start
@@ -68,7 +66,7 @@ sudo ./target/release/rdhcpd example-config.toml
 
 ## Configuration
 
-All configuration is in a single TOML file. See [`example-config.toml`](example-config.toml) for a full reference.
+All configuration is in a single TOML file. See [`example-config.toml`](example-config.toml) for a full reference with comments.
 
 ### Minimal IPv4
 
@@ -99,6 +97,7 @@ lease_db = "/var/lib/rdhcpd/leases"
 
 [api]
 listen = "127.0.0.1:8080"
+api_key = "my-secret-key"
 
 [ha]
 mode = "standalone"
@@ -190,6 +189,128 @@ ttl = 300
 
 Creates/removes A, AAAA, and PTR records automatically on lease assignment and expiry.
 
+## Security
+
+rDHCP includes multiple layers of defense against common DHCP attacks and misconfigurations.
+
+### Rate Limiting
+
+Per-client and global rate limiting using token bucket algorithms to prevent DHCP starvation:
+
+```toml
+[global]
+rate_limit_burst = 10           # max packets in a burst per client
+rate_limit_pps = 5.0            # sustained packets/sec per client
+global_rate_limit_pps = 1000.0  # total server-wide packets/sec (0 = disabled)
+```
+
+- **Per-client** — Keyed by MAC (DHCPv4) or DUID (DHCPv6). A client exceeding its limit has packets silently dropped until tokens refill.
+- **Global** — Applies before per-client checks. Protects against distributed attacks where many clients each stay under the per-client limit.
+
+### MAC Access Control Lists
+
+Per-subnet allow/deny lists to restrict which clients can obtain leases:
+
+```toml
+[[subnet]]
+network = "10.0.1.0/24"
+mac_allow = ["aa:bb:cc:dd:ee:f1", "aa:bb:cc:dd:ee:f2"]  # empty = allow all
+mac_deny = ["00:11:22:33:44:55"]                          # deny list wins
+```
+
+The deny list is checked first. If the allow list is non-empty, only listed MACs receive leases. Denied clients are logged at WARN level.
+
+### Rogue Client Detection
+
+Sliding window anomaly detection alerts on suspicious client behavior:
+
+```toml
+[global]
+rogue_threshold = 50      # requests per window before warning
+rogue_window_secs = 60    # detection window
+pool_high_water = 0.9     # warn at 90% pool utilization
+```
+
+When a client exceeds the threshold, a WARN log is emitted with the client identifier and request count. Pool utilization warnings fire when allocation crosses the high-water mark.
+
+### Max Leases Per MAC
+
+Prevents a single client (or spoofed MAC) from accumulating multiple leases:
+
+```toml
+[[subnet]]
+max_leases_per_mac = 1    # default: 1, set to 0 for unlimited
+```
+
+### Duplicate IP Detection
+
+Optional probing before offering an address to detect conflicts proactively:
+
+```toml
+[[subnet]]
+ip_probe = true
+ip_probe_timeout_ms = 500
+```
+
+When enabled, the server sends a probe to the candidate IP before offering it. If a response is received (indicating the address is already in use), the IP is skipped and a warning is logged.
+
+### Relay Hop Count Validation
+
+- **DHCPv4**: Packets with `hops > 16` are dropped (per RFC 1542 recommendation)
+- **DHCPv6**: Relay-forward messages with `hop_count > 32` are dropped (per RFC 8415 section 5.2)
+
+### Client ID Consistency
+
+When a DHCPv4 client sends option 61 (Client Identifier), it is used as the primary lookup key for lease deduplication (per RFC 2131 section 4.2). This prevents a client from holding multiple leases by varying its client ID while keeping the same MAC.
+
+### Max Lease Time Enforcement
+
+Clients can request a shorter lease time, but the server caps it at the configured maximum:
+
+```toml
+[[subnet]]
+lease_time = 86400          # default offered lease time
+max_lease_time = 172800     # absolute cap (optional)
+```
+
+### API Authentication
+
+The REST API supports API key authentication via the `X-API-Key` header:
+
+```toml
+[api]
+listen = "127.0.0.1:8080"
+api_key = "my-secret-key"
+```
+
+- All `/api/v1/*` endpoints require the `X-API-Key` header when `api_key` is configured
+- `/health`, `/healthz`, and `/metrics` endpoints are exempt (always accessible)
+- A startup warning is logged if the API is bound to a non-loopback address without an API key
+
+### HA Communication
+
+All HA peer communication (active/active and Raft) uses mutual TLS (mTLS) via rustls. No OpenSSL dependency.
+
+### Summary
+
+| Protection | Layer | Default |
+|---|---|---|
+| Per-client rate limiting | Global | 10 burst / 5 pps |
+| Global rate limiting | Global | Disabled |
+| MAC ACLs (allow/deny) | Per-subnet | Disabled |
+| Max leases per MAC | Per-subnet | 1 |
+| Rogue client detection | Global | 50 req/60s window |
+| Pool high-water alerting | Global | 90% |
+| Duplicate IP probing | Per-subnet | Disabled |
+| DHCPv4 hop count limit | Protocol | 16 hops |
+| DHCPv6 hop count limit | Protocol | 32 hops |
+| Client ID dedup (option 61) | Protocol | Always on |
+| Max lease time cap | Per-subnet | Disabled |
+| API key authentication | API | Disabled |
+| Lease ownership validation | Protocol | Always on |
+| Declined IP quarantine | Protocol | 24 hours |
+| mTLS for HA peers | HA | Required when HA enabled |
+
 ## REST API
 
 The management API is enabled by adding an `[api]` section to the config.
@@ -209,15 +330,21 @@ The management API is enabled by adding an `[api]` section to the config.
 
 ```bash
 # List all bound leases in a subnet
-curl "http://localhost:8080/api/v1/leases?subnet=10.0.1.0/24&state=bound"
+curl -H "X-API-Key: my-secret-key" \
+  "http://localhost:8080/api/v1/leases?subnet=10.0.1.0/24&state=bound"
 
 # Check pool utilization
-curl http://localhost:8080/api/v1/leases/stats
+curl -H "X-API-Key: my-secret-key" \
+  http://localhost:8080/api/v1/leases/stats
 
 # Force-release a lease
-curl -X DELETE http://localhost:8080/api/v1/leases/10.0.1.150
+curl -X DELETE -H "X-API-Key: my-secret-key" \
+  http://localhost:8080/api/v1/leases/10.0.1.150
 
-# Prometheus scrape
+# Health check (no auth required)
+curl http://localhost:8080/health
+
+# Prometheus scrape (no auth required)
 curl http://localhost:8080/metrics
 ```
 
@@ -301,12 +428,14 @@ src/
 │   ├── peer.rs       mTLS connection management (rustls)
 │   └── protocol.rs   Length-prefixed JSON wire protocol
 ├── api/
+│   ├── mod.rs        REST API server, authentication middleware
 │   ├── handlers.rs   REST endpoints (axum)
 │   └── metrics.rs    Prometheus exposition
 ├── ddns/
 │   ├── dns.rs        RFC 2136 UPDATE message builder
 │   └── tsig.rs       HMAC-SHA256 TSIG signing (pure Rust, no crypto dep)
-└── ratelimit.rs      Token bucket rate limiter, MAC ACLs
+├── probe.rs          Duplicate IP detection via network probes
+└── ratelimit.rs      Token bucket rate limiters, MAC ACLs, rogue detection
 ```
 
 ## Benchmarking
@@ -330,13 +459,20 @@ sudo ./bench/run.sh
 | `log_level` | string | `"info"` | Log level: trace, debug, info, warn, error |
 | `log_format` | string | `"text"` | Log format: `text` or `json` |
 | `lease_db` | string | `"/var/lib/rdhcpd/leases"` | Directory for WAL and snapshots |
+| `workers` | int | `1` | Receive workers per protocol (DHCPv4/v6) |
+| `rate_limit_burst` | int | `10` | Per-client max burst (packets) |
+| `rate_limit_pps` | float | `5.0` | Per-client sustained rate (packets/sec) |
+| `global_rate_limit_pps` | float | `0.0` | Global rate limit (0 = disabled) |
+| `rogue_threshold` | int | `50` | Requests per window before rogue alert |
+| `rogue_window_secs` | int | `60` | Rogue detection sliding window (seconds) |
+| `pool_high_water` | float | `0.9` | Pool utilization warning threshold (0.0-1.0) |
 
 ### `[api]`
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `listen` | string | required | Bind address (e.g. `"127.0.0.1:8080"`) |
-| `api_key` | string | none | Optional API key for authentication |
+| `api_key` | string | none | API key for `X-API-Key` header authentication |
 
 ### `[ha]`
 
@@ -362,12 +498,20 @@ sudo ./bench/run.sh
 | `pool_start` | string | none | First IP in dynamic pool |
 | `pool_end` | string | none | Last IP in dynamic pool |
 | `lease_time` | int | `86400` | Lease duration in seconds |
+| `max_lease_time` | int | none | Cap on client-requested lease time |
+| `renewal_time` | int | none | T1 renewal time (default: 50% of lease_time) |
+| `rebinding_time` | int | none | T2 rebinding time (default: 87.5% of lease_time) |
 | `preferred_time` | int | none | DHCPv6 preferred lifetime |
 | `type` | string | `"address"` | `"address"` or `"prefix-delegation"` |
 | `delegated_length` | int | none | Prefix length for PD (e.g. 56) |
 | `router` | string | none | Default gateway (DHCPv4 option 3) |
 | `dns` | string[] | `[]` | DNS servers (option 6 / option 23) |
 | `domain` | string | none | Domain name (option 15 / option 24) |
+| `max_leases_per_mac` | int | `1` | Max active leases per MAC (0 = unlimited) |
+| `ip_probe` | bool | `false` | Probe IP before offering (duplicate detection) |
+| `ip_probe_timeout_ms` | int | `500` | Probe timeout in milliseconds |
+| `mac_allow` | string[] | `[]` | MAC allow list (empty = allow all) |
+| `mac_deny` | string[] | `[]` | MAC deny list (checked before allow list) |
 
 ### `[[subnet.reservation]]`
 

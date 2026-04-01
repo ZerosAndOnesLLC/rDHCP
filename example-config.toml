@@ -1,39 +1,85 @@
-[global]
-log_level = "info"
-log_format = "text"
-lease_db = "/var/lib/rdhcpd/leases"
+# =============================================================================
+# rDHCP — Example Configuration
+# =============================================================================
+# Full reference for all options. Uncomment and edit sections as needed.
+# Minimal required: [global], [ha], and at least one [[subnet]].
 
+# -----------------------------------------------------------------------------
+# Global server settings
+# -----------------------------------------------------------------------------
+[global]
+log_level = "info"                # trace, debug, info, warn, error
+log_format = "text"               # "text" or "json"
+lease_db = "/var/lib/rdhcpd/leases"
+workers = 1                       # receive workers per protocol (DHCPv4/v6)
+
+# --- Rate Limiting & Security ---
+rate_limit_burst = 10             # per-client burst size (packets)
+rate_limit_pps = 5.0              # per-client sustained rate (packets/sec)
+global_rate_limit_pps = 0.0       # global rate limit, 0 = disabled (packets/sec)
+rogue_threshold = 50              # requests per window before rogue alert
+rogue_window_secs = 60            # sliding window for rogue detection
+pool_high_water = 0.9             # warn when pool utilization exceeds this (0.0-1.0)
+
+# -----------------------------------------------------------------------------
+# REST Management API
+# -----------------------------------------------------------------------------
 [api]
 listen = "127.0.0.1:8080"
-# api_key = "change-me"
+api_key = "change-me"             # required for non-loopback bind addresses
+                                  # all /api/v1/* endpoints require X-API-Key header
+                                  # /health, /healthz, and /metrics are exempt
 
+# -----------------------------------------------------------------------------
+# High Availability
+# -----------------------------------------------------------------------------
 [ha]
 mode = "standalone"
 
-# Active/Active example:
+# Active/Active — two nodes, split-scope with automatic failover:
 # [ha]
 # mode = "active-active"
 # peer = "10.0.0.2:9000"
-# scope_split = 0.5
-# mclt = 3600
-# partner_down_delay = 3600
+# listen = "0.0.0.0:9000"
+# scope_split = 0.5               # fraction of pool for this node (0.0-1.0)
+# mclt = 3600                     # max client lead time (seconds)
+# partner_down_delay = 3600       # seconds before taking over peer's scope
+# tls_cert = "/etc/rdhcpd/cert.pem"
+# tls_key = "/etc/rdhcpd/key.pem"
+# tls_ca = "/etc/rdhcpd/ca.pem"
 
-# Raft example:
+# Raft — three or more nodes, consensus-based:
 # [ha]
 # mode = "raft"
 # node_id = 1
 # peers = ["10.0.0.2:9000", "10.0.0.3:9000"]
+# tls_cert = "/etc/rdhcpd/cert.pem"
+# tls_key = "/etc/rdhcpd/key.pem"
+# tls_ca = "/etc/rdhcpd/ca.pem"
 
-# IPv4 subnet
+# -----------------------------------------------------------------------------
+# IPv4 Subnet
+# -----------------------------------------------------------------------------
 [[subnet]]
 network = "10.0.1.0/24"
 pool_start = "10.0.1.100"
 pool_end = "10.0.1.250"
-lease_time = 86400
+lease_time = 86400                # 24 hours
+max_lease_time = 172800           # cap client-requested lease time to 48h
+# renewal_time = 43200            # T1 (default: 50% of lease_time)
+# rebinding_time = 75600          # T2 (default: 87.5% of lease_time)
 router = "10.0.1.1"
 dns = ["10.0.0.53", "10.0.0.54"]
 domain = "example.com"
 
+# --- Per-Subnet Security ---
+max_leases_per_mac = 1            # max active leases per MAC (0 = unlimited)
+ip_probe = false                  # probe IP before offering (duplicate detection)
+# ip_probe_timeout_ms = 500       # probe timeout in ms
+# mac_allow = ["aa:bb:cc:dd:ee:f1", "aa:bb:cc:dd:ee:f2"]  # whitelist (empty = allow all)
+# mac_deny = ["00:11:22:33:44:55"]                          # blacklist (checked first)
+
+# --- Static Reservations ---
 [[subnet.reservation]]
 mac = "aa:bb:cc:dd:ee:f1"
 ip = "10.0.1.10"
@@ -44,7 +90,14 @@ mac = "aa:bb:cc:dd:ee:f2"
 ip = "10.0.1.11"
 hostname = "server"
 
-# IPv6 subnet
+# [[subnet.reservation]]
+# client_id = "01aabbccddeef3"    # option 61 client identifier (hex)
+# ip = "10.0.1.12"
+# hostname = "laptop"
+
+# -----------------------------------------------------------------------------
+# IPv6 Subnet
+# -----------------------------------------------------------------------------
 [[subnet]]
 network = "2001:db8:1::/64"
 pool_start = "2001:db8:1::1000"
@@ -54,18 +107,25 @@ preferred_time = 43200
 dns = ["2001:db8::53"]
 domain = "example.com"
 
-# IPv6 prefix delegation
+# -----------------------------------------------------------------------------
+# IPv6 Prefix Delegation
+# -----------------------------------------------------------------------------
 [[subnet]]
 network = "2001:db8:pd::/48"
 type = "prefix-delegation"
 delegated_length = 56
-lease_time = 604800
+lease_time = 604800               # 7 days
 
+# -----------------------------------------------------------------------------
+# Dynamic DNS (RFC 2136)
+# -----------------------------------------------------------------------------
 [ddns]
 enabled = false
 # forward_zone = "example.com"
 # reverse_zone_v4 = "1.0.10.in-addr.arpa"
+# reverse_zone_v6 = "8.b.d.0.1.0.0.2.ip6.arpa"
 # dns_server = "10.0.0.53"
 # tsig_key = "dhcp-key"
 # tsig_algorithm = "hmac-sha256"
 # tsig_secret = "base64secret=="
+# ttl = 300
