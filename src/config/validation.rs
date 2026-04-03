@@ -1,5 +1,7 @@
 use std::net::IpAddr;
 
+use tracing::warn;
+
 use super::{Config, ConfigError};
 
 pub fn validate(config: &Config) -> Result<(), ConfigError> {
@@ -207,6 +209,15 @@ fn validate_tls_config(
                 mode
             )));
         }
+    } else {
+        // No TLS configured — warn loudly since peer traffic is unencrypted
+        warn!(
+            mode,
+            "HA {} mode configured WITHOUT TLS — lease sync traffic \
+             (MACs, IPs, hostnames) will travel unencrypted between peers. \
+             Configure tls_cert, tls_key, and tls_ca for production use.",
+            mode
+        );
     }
 
     Ok(())

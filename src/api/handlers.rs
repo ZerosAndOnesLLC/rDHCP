@@ -5,6 +5,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use serde::{Deserialize, Serialize};
+use tracing::{info, warn};
 
 use super::ApiState;
 use crate::ha::HaBackend;
@@ -146,6 +147,18 @@ pub async fn delete_lease<H: HaBackend>(
                     break;
                 }
             }
+
+            // Persist removal to WAL so it survives restarts
+            if let Err(e) = state.wal.log_remove(&ip_addr).await {
+                warn!(ip = %ip_addr, error = %e, "failed to write lease removal to WAL");
+            }
+
+            // Notify HA peer
+            if let Err(e) = state.ha.release_lease(&ip_addr).await {
+                warn!(ip = %ip_addr, error = %e, "failed to notify HA peer of lease deletion");
+            }
+
+            info!(ip = %ip_addr, "lease deleted via API");
             Ok(StatusCode::NO_CONTENT)
         }
         None => Err(StatusCode::NOT_FOUND),

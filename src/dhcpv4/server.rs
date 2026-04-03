@@ -208,7 +208,10 @@ impl<H: HaBackend> DhcpV4Server<H> {
 
             // Rogue client detection
             let mac_label = format_mac(&mac).to_string();
-            self.rogue_detector.record(&mac, &mac_label);
+            if !self.rogue_detector.record(&mac, &mac_label) {
+                debug!(mac = %format_mac(&mac), "dropped by rogue detector");
+                continue;
+            }
 
             debug!(
                 msg_type = ?msg_type,

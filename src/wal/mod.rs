@@ -66,6 +66,17 @@ impl WalOp {
 /// ```
 ///
 /// For Remove/StateChange entries, only [op, ip_version, ip, state, crc32] are written.
+///
+/// **Security note**: CRC32 detects accidental corruption only. It provides no
+/// protection against deliberate tampering — an attacker with filesystem write
+/// access can craft entries with valid CRC32 checksums. Protect the WAL directory
+/// with filesystem permissions (the systemd unit restricts writes to /var/lib/rdhcpd).
+
+/// Maximum allowed length for variable-length WAL fields.
+/// Prevents excessive memory allocation from corrupted/crafted WAL files.
+const MAX_CLIENT_ID_LEN: usize = 1024;
+const MAX_HOSTNAME_LEN: usize = 255;
+const MAX_SUBNET_LEN: usize = 256;
 
 /// Write-ahead log for lease durability
 pub struct Wal {
@@ -165,6 +176,44 @@ impl Wal {
         let mut writer = self.writer.lock().await;
         writer.flush().await?;
         Ok(())
+    }
+
+    /// Compact the WAL by rewriting it with only the current active leases.
+    /// Call after replay to reclaim space from expired/released/duplicate entries.
+    pub async fn compact(&self, store: &LeaseStore) -> Result<usize, WalError> {
+        let tmp_path = self.path.with_extension("bin.tmp");
+
+        // Write all active leases to a temporary file
+        let tmp_file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&tmp_path)
+            .await?;
+        let mut tmp_writer = BufWriter::new(tmp_file);
+
+        let leases = store.all_active_leases();
+        let count = leases.len();
+
+        for lease in &leases {
+            let data = Self::encode_upsert(lease);
+            tmp_writer.write_all(&data).await?;
+        }
+        tmp_writer.flush().await?;
+        drop(tmp_writer);
+
+        // Atomically replace the old WAL with the compacted one
+        fs::rename(&tmp_path, &self.path).await?;
+
+        // Reopen the writer pointing at the new file (append mode)
+        let new_file = OpenOptions::new()
+            .append(true)
+            .open(&self.path)
+            .await?;
+        let mut writer = self.writer.lock().await;
+        *writer = BufWriter::new(new_file);
+
+        Ok(count)
     }
 
     fn encode_upsert(lease: &Lease) -> Vec<u8> {
@@ -360,6 +409,12 @@ impl Wal {
                 reader.read_exact(&mut len_bytes).await?;
                 all_bytes.extend_from_slice(&len_bytes);
                 let cid_len = u16::from_le_bytes(len_bytes) as usize;
+                if cid_len > MAX_CLIENT_ID_LEN {
+                    return Err(WalError::Corrupt {
+                        offset: 0,
+                        reason: format!("client_id length {} exceeds max {}", cid_len, MAX_CLIENT_ID_LEN),
+                    });
+                }
                 let client_id = if cid_len > 0 {
                     let mut cid = vec![0u8; cid_len];
                     reader.read_exact(&mut cid).await?;
@@ -373,11 +428,22 @@ impl Wal {
                 reader.read_exact(&mut len_bytes).await?;
                 all_bytes.extend_from_slice(&len_bytes);
                 let hostname_len = u16::from_le_bytes(len_bytes) as usize;
+                if hostname_len > MAX_HOSTNAME_LEN {
+                    return Err(WalError::Corrupt {
+                        offset: 0,
+                        reason: format!("hostname length {} exceeds max {}", hostname_len, MAX_HOSTNAME_LEN),
+                    });
+                }
                 let hostname = if hostname_len > 0 {
                     let mut hbuf = vec![0u8; hostname_len];
                     reader.read_exact(&mut hbuf).await?;
                     all_bytes.extend_from_slice(&hbuf);
-                    Some(Arc::from(String::from_utf8_lossy(&hbuf).as_ref()))
+                    // Only accept valid ASCII hostnames
+                    if hbuf.iter().all(|b| b.is_ascii_graphic() || *b == b' ') {
+                        Some(Arc::from(String::from_utf8_lossy(&hbuf).as_ref()))
+                    } else {
+                        None // Discard non-ASCII hostnames
+                    }
                 } else {
                     None
                 };
@@ -403,6 +469,12 @@ impl Wal {
                 reader.read_exact(&mut len_bytes).await?;
                 all_bytes.extend_from_slice(&len_bytes);
                 let subnet_len = u16::from_le_bytes(len_bytes) as usize;
+                if subnet_len > MAX_SUBNET_LEN {
+                    return Err(WalError::Corrupt {
+                        offset: 0,
+                        reason: format!("subnet length {} exceeds max {}", subnet_len, MAX_SUBNET_LEN),
+                    });
+                }
                 let mut subnet_buf = vec![0u8; subnet_len];
                 reader.read_exact(&mut subnet_buf).await?;
                 all_bytes.extend_from_slice(&subnet_buf);

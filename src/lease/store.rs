@@ -200,4 +200,14 @@ impl LeaseStore {
             .get(ip)
             .is_some_and(|r| r.is_active())
     }
+
+    /// Return all active (Offered or Bound) leases. Used for WAL compaction.
+    pub fn all_active_leases(&self) -> Vec<Lease> {
+        self.inner
+            .leases
+            .iter()
+            .filter(|r| r.value().is_active())
+            .map(|r| r.value().clone())
+            .collect()
+    }
 }

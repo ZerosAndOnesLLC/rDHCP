@@ -1,6 +1,6 @@
 [package]
 name = "rdhcpd"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 description = "High-performance DHCP server with built-in HA support. Dual-stack (DHCPv4/DHCPv6), active/active and Raft HA, single binary, no external DB."
 license = "MIT"
@@ -42,6 +42,17 @@ crc32fast = "1"
 
 # Byte order for packet parsing
 byteorder = "1"
+
+# Cryptography (TSIG signing)
+sha2 = "0.10"
+hmac = "0.12"
+base64 = "0.22"
+
+# Constant-time comparison (API key)
+subtle = "2"
+
+# Random number generation (DDNS transaction IDs)
+rand = "0.9"
 
 # TLS for HA peer communication
 tokio-rustls = "0.26"

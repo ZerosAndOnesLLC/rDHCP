@@ -5,7 +5,6 @@ mod tsig;
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
@@ -78,12 +77,26 @@ impl DdnsClient {
     }
 
     fn make_fqdn(&self, hostname: &str) -> String {
-        if hostname.contains('.') {
-            hostname.to_string()
-        } else if let Some(ref zone) = self.config.forward_zone {
-            format!("{}.{}", hostname, zone)
+        // Sanitize: only allow RFC 952/1123 characters (alphanumeric, hyphen, dot)
+        let sanitized: String = hostname
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '.')
+            .collect();
+
+        if sanitized.is_empty() {
+            return String::new();
+        }
+
+        // Always append the forward zone — don't let client-provided dots
+        // bypass zone scoping, which could create records in arbitrary zones
+        if let Some(ref zone) = self.config.forward_zone {
+            // Strip any trailing dots from the sanitized label
+            let label = sanitized.trim_end_matches('.');
+            // Use only the first label (before any dot) to prevent zone escape
+            let first_label = label.split('.').next().unwrap_or(label);
+            format!("{}.{}", first_label, zone)
         } else {
-            hostname.to_string()
+            sanitized
         }
     }
 }
@@ -259,7 +272,7 @@ fn build_update(
     is_delete: bool,
     tsig_key: Option<&tsig::TsigKey>,
 ) -> Vec<u8> {
-    let id = (epoch_now() & 0xFFFF) as u16;
+    let id: u16 = rand::random();
 
     let mut msg = DnsMessage::new(id, DnsOpcode::Update);
 
@@ -345,9 +358,3 @@ fn ip_to_rdata(ip: &IpAddr) -> Vec<u8> {
     }
 }
 
-fn epoch_now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}

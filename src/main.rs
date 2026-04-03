@@ -53,6 +53,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let replayed = wal.replay(&lease_store).await?;
     info!(replayed, "WAL replay complete");
 
+    // Compact WAL: rewrite with only active leases to reclaim space
+    let compacted = wal.compact(&lease_store).await?;
+    info!(active_leases = compacted, "WAL compacted");
+
     // Initialize allocators from config and lease state
     let allocators = Arc::new(allocator::build_allocators(&config, &lease_store)?);
     info!(subnets = allocators.len(), "subnet allocators initialized");
@@ -111,6 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             lease_store: lease_store.clone(),
             allocators: allocators.clone(),
             ha: ha.clone(),
+            wal: wal.clone(),
             api_key: api_config.api_key.clone(),
         });
 
@@ -413,12 +418,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             match Config::load(&reload_config_path) {
                 Ok(_new_config) => {
-                    info!("configuration reloaded successfully");
-                    // Note: subnet/pool changes require restart.
-                    // SIGHUP reloads options, reservations, and logging config.
+                    info!("configuration validated successfully (hot reload not yet implemented — restart required to apply changes)");
                 }
                 Err(e) => {
-                    error!(error = %e, "failed to reload configuration, keeping current");
+                    error!(error = %e, "configuration validation failed");
                 }
             }
         }

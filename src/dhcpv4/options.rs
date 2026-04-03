@@ -192,10 +192,19 @@ impl DhcpOption {
                     DhcpOption::DnsServers(addrs)
                 }
                 code::HOSTNAME => {
-                    DhcpOption::Hostname(String::from_utf8_lossy(opt_data).into_owned())
+                    // Only accept printable ASCII hostnames; reject binary/non-ASCII data
+                    if opt_data.iter().all(|b| b.is_ascii_graphic() || *b == b' ') {
+                        DhcpOption::Hostname(String::from_utf8_lossy(opt_data).into_owned())
+                    } else {
+                        DhcpOption::Unknown(opt_code, opt_data.to_vec())
+                    }
                 }
                 code::DOMAIN_NAME => {
-                    DhcpOption::DomainName(String::from_utf8_lossy(opt_data).into_owned())
+                    if opt_data.iter().all(|b| b.is_ascii_graphic() || *b == b' ') {
+                        DhcpOption::DomainName(String::from_utf8_lossy(opt_data).into_owned())
+                    } else {
+                        DhcpOption::Unknown(opt_code, opt_data.to_vec())
+                    }
                 }
                 code::BROADCAST_ADDR => {
                     if opt_len != 4 {
@@ -293,17 +302,48 @@ impl DhcpOption {
     }
 
     /// Serialize all options into a buffer. Returns bytes written.
+    /// Stops writing if the buffer is too small for the next option.
     pub fn serialize_all(options: &[DhcpOption], buf: &mut [u8]) -> usize {
         let mut pos = 0;
 
         for opt in options {
+            let needed = opt.serialized_len();
+            if pos + needed > buf.len() {
+                // Not enough space — stop adding options to prevent panic
+                break;
+            }
             pos += opt.serialize(&mut buf[pos..]);
         }
 
         pos
     }
 
+    /// Returns the number of bytes this option will occupy when serialized.
+    fn serialized_len(&self) -> usize {
+        match self {
+            DhcpOption::SubnetMask(_)
+            | DhcpOption::BroadcastAddr(_)
+            | DhcpOption::RequestedIp(_)
+            | DhcpOption::ServerIdentifier(_) => 6,
+            DhcpOption::Router(addrs) => 2 + addrs.len().min(63) * 4,
+            DhcpOption::DnsServers(addrs) => 2 + addrs.len().min(63) * 4,
+            DhcpOption::Hostname(name) => 2 + name.len().min(255),
+            DhcpOption::DomainName(name) => 2 + name.len().min(255),
+            DhcpOption::LeaseTime(_)
+            | DhcpOption::RenewalTime(_)
+            | DhcpOption::RebindingTime(_) => 6,
+            DhcpOption::MessageType(_) => 3,
+            DhcpOption::ParameterRequestList(list) => 2 + list.len().min(255),
+            DhcpOption::MaxMessageSize(_) => 4,
+            DhcpOption::VendorClassId(data)
+            | DhcpOption::ClientIdentifier(data)
+            | DhcpOption::RelayAgentInfo(data) => 2 + data.len().min(255),
+            DhcpOption::Unknown(_, data) => 2 + data.len().min(255),
+        }
+    }
+
     /// Serialize a single option into a buffer. Returns bytes written.
+    /// Caller must ensure `buf` has at least `serialized_len()` bytes available.
     pub fn serialize(&self, buf: &mut [u8]) -> usize {
         match self {
             DhcpOption::SubnetMask(addr) => {
@@ -314,7 +354,6 @@ impl DhcpOption {
             }
             DhcpOption::Router(addrs) => {
                 buf[0] = code::ROUTER;
-                // RFC 2132: max 255 bytes = 63 addresses
                 let count = addrs.len().min(63);
                 let len = (count * 4) as u8;
                 buf[1] = len;
@@ -380,10 +419,11 @@ impl DhcpOption {
                 6
             }
             DhcpOption::ParameterRequestList(list) => {
+                let len = list.len().min(255);
                 buf[0] = code::PARAMETER_REQUEST_LIST;
-                buf[1] = list.len() as u8;
-                buf[2..2 + list.len()].copy_from_slice(list);
-                2 + list.len()
+                buf[1] = len as u8;
+                buf[2..2 + len].copy_from_slice(&list[..len]);
+                2 + len
             }
             DhcpOption::MaxMessageSize(size) => {
                 buf[0] = code::MAX_MESSAGE_SIZE;
@@ -404,28 +444,32 @@ impl DhcpOption {
                 6
             }
             DhcpOption::VendorClassId(data) => {
+                let len = data.len().min(255);
                 buf[0] = code::VENDOR_CLASS_ID;
-                buf[1] = data.len() as u8;
-                buf[2..2 + data.len()].copy_from_slice(data);
-                2 + data.len()
+                buf[1] = len as u8;
+                buf[2..2 + len].copy_from_slice(&data[..len]);
+                2 + len
             }
             DhcpOption::ClientIdentifier(data) => {
+                let len = data.len().min(255);
                 buf[0] = code::CLIENT_ID;
-                buf[1] = data.len() as u8;
-                buf[2..2 + data.len()].copy_from_slice(data);
-                2 + data.len()
+                buf[1] = len as u8;
+                buf[2..2 + len].copy_from_slice(&data[..len]);
+                2 + len
             }
             DhcpOption::RelayAgentInfo(data) => {
+                let len = data.len().min(255);
                 buf[0] = code::RELAY_AGENT_INFO;
-                buf[1] = data.len() as u8;
-                buf[2..2 + data.len()].copy_from_slice(data);
-                2 + data.len()
+                buf[1] = len as u8;
+                buf[2..2 + len].copy_from_slice(&data[..len]);
+                2 + len
             }
             DhcpOption::Unknown(opt_code, data) => {
+                let len = data.len().min(255);
                 buf[0] = *opt_code;
-                buf[1] = data.len() as u8;
-                buf[2..2 + data.len()].copy_from_slice(data);
-                2 + data.len()
+                buf[1] = len as u8;
+                buf[2..2 + len].copy_from_slice(&data[..len]);
+                2 + len
             }
         }
     }

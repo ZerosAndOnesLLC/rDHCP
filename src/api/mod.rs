@@ -12,12 +12,14 @@ use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::{delete, get};
 use axum::Router;
+use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tracing::info;
 
 use crate::allocator::SubnetAllocator;
 use crate::ha::HaBackend;
 use crate::lease::store::LeaseStore;
+use crate::wal::Wal;
 
 /// Shared state available to all API handlers
 pub struct ApiState<H: HaBackend> {
@@ -27,6 +29,8 @@ pub struct ApiState<H: HaBackend> {
     pub allocators: Arc<HashMap<String, SubnetAllocator>>,
     /// High-availability backend for peer state replication
     pub ha: Arc<H>,
+    /// Write-ahead log for durable lease persistence
+    pub wal: Arc<Wal>,
     /// Optional API key for authenticating management requests
     pub api_key: Option<String>,
 }
@@ -38,9 +42,9 @@ async fn auth_middleware<H: HaBackend>(
     req: Request<axum::body::Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    // Skip auth for health checks and metrics
+    // Skip auth for health checks only (metrics require auth as they expose pool data)
     let path = req.uri().path();
-    if path == "/health" || path == "/healthz" || path == "/metrics" {
+    if path == "/health" || path == "/healthz" {
         return Ok(next.run(req).await);
     }
 
@@ -49,9 +53,11 @@ async fn auth_middleware<H: HaBackend>(
         return Ok(next.run(req).await);
     };
 
-    // Check X-API-Key header
+    // Check X-API-Key header (constant-time comparison to prevent timing attacks)
     match req.headers().get("x-api-key") {
-        Some(provided) if provided.as_bytes() == expected_key.as_bytes() => {
+        Some(provided)
+            if provided.as_bytes().ct_eq(expected_key.as_bytes()).into() =>
+        {
             Ok(next.run(req).await)
         }
         _ => Err(StatusCode::UNAUTHORIZED),

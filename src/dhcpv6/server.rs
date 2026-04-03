@@ -169,7 +169,10 @@ impl<H: HaBackend> DhcpV6Server<H> {
                 return Ok(None);
             }
             let label = client_id.iter().map(|b| format!("{:02x}", b)).collect::<String>();
-            self.rogue_detector.record(client_id, &label);
+            if !self.rogue_detector.record(client_id, &label) {
+                debug!("DHCPv6 packet dropped by rogue detector");
+                return Ok(None);
+            }
         }
 
         debug!(
