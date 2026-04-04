@@ -38,6 +38,9 @@ pub enum DhcpSender {
 /// Duration to hold an Offer before it expires (seconds)
 const OFFER_HOLD_TIME: u64 = 30;
 
+/// Minimum lease time we'll grant (prevents rapid-churn DoS)
+const MIN_LEASE_TIME: u32 = 60;
+
 /// Maximum DHCPv4 relay hop count (RFC 1542 recommends 16)
 const MAX_HOPS: u8 = 16;
 
@@ -527,10 +530,10 @@ impl<H: HaBackend> DhcpV4Server<H> {
             .unwrap_or_default()
             .as_secs();
 
-        // Enforce max_lease_time: cap client-requested lease time
+        // Enforce lease time bounds: respect client request within [MIN, max]
         let mut lease_time = subnet.config.lease_time;
         if let Some(requested_lt) = packet.requested_lease_time() {
-            if requested_lt > 0 && requested_lt < lease_time {
+            if requested_lt >= MIN_LEASE_TIME && requested_lt < lease_time {
                 lease_time = requested_lt;
             }
         }
@@ -539,6 +542,8 @@ impl<H: HaBackend> DhcpV4Server<H> {
                 lease_time = max_lt;
             }
         }
+        // Floor: never grant less than MIN_LEASE_TIME
+        lease_time = lease_time.max(MIN_LEASE_TIME);
 
         let lease = Lease {
             ip: ip_addr,
@@ -548,7 +553,7 @@ impl<H: HaBackend> DhcpV4Server<H> {
             lease_time,
             state: LeaseState::Bound,
             start_time: now_epoch,
-            expire_time: now_epoch + lease_time as u64,
+            expire_time: now_epoch.saturating_add(lease_time as u64),
             expires_at: Instant::now() + Duration::from_secs(lease_time as u64),
             subnet: Arc::clone(&subnet.network),
         };
@@ -635,7 +640,7 @@ impl<H: HaBackend> DhcpV4Server<H> {
                 lease_time: 86400, // Hold declined IPs for 24h
                 state: LeaseState::Declined,
                 start_time: now_epoch,
-                expire_time: now_epoch + 86400,
+                expire_time: now_epoch.saturating_add(86400),
                 expires_at: Instant::now() + Duration::from_secs(86400),
                 subnet: subnet_name,
             };
@@ -766,7 +771,7 @@ impl<H: HaBackend> DhcpV4Server<H> {
             lease_time: OFFER_HOLD_TIME as u32,
             state: LeaseState::Offered,
             start_time: now_epoch,
-            expire_time: now_epoch + OFFER_HOLD_TIME,
+            expire_time: now_epoch.saturating_add(OFFER_HOLD_TIME),
             expires_at: Instant::now() + Duration::from_secs(OFFER_HOLD_TIME),
             subnet: Arc::clone(&subnet.network),
         };

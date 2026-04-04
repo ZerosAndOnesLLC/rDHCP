@@ -181,6 +181,13 @@ impl Wal {
     /// Compact the WAL by rewriting it with only the current active leases.
     /// Call after replay to reclaim space from expired/released/duplicate entries.
     pub async fn compact(&self, store: &LeaseStore) -> Result<usize, WalError> {
+        // Hold the writer lock for the entire operation to prevent new entries
+        // from being written to the old WAL between the snapshot and the rename.
+        let mut writer = self.writer.lock().await;
+
+        // Flush any buffered writes to the old WAL before replacing it
+        writer.flush().await?;
+
         let tmp_path = self.path.with_extension("bin.tmp");
 
         // Write all active leases to a temporary file
@@ -210,7 +217,6 @@ impl Wal {
             .append(true)
             .open(&self.path)
             .await?;
-        let mut writer = self.writer.lock().await;
         *writer = BufWriter::new(new_file);
 
         Ok(count)

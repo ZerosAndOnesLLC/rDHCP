@@ -387,6 +387,11 @@ impl Dhcpv6Option {
         for opt in options {
             let needed = opt.serialized_len();
             if pos + needed > buf.len() {
+                tracing::warn!(
+                    remaining_bytes = buf.len() - pos,
+                    needed_bytes = needed,
+                    "DHCPv6 option truncated: buffer too small"
+                );
                 break;
             }
             pos += opt.serialize(&mut buf[pos..]);

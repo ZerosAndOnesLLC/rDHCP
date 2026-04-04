@@ -71,9 +71,24 @@ impl RateLimiter {
             return false;
         }
 
-        // Reject new clients if bucket count exceeds cap (anti-spoofing)
+        // Evict stale buckets if count exceeds cap (anti-spoofing)
         if self.buckets.len() >= MAX_RATE_LIMIT_BUCKETS {
-            return false;
+            self.cleanup(now);
+            // If still over cap after cleanup, force-evict oldest 10%
+            if self.buckets.len() >= MAX_RATE_LIMIT_BUCKETS {
+                let evict_count = MAX_RATE_LIMIT_BUCKETS / 10;
+                let mut evicted = 0;
+                self.buckets.retain(|_, bucket| {
+                    if evicted >= evict_count {
+                        return true;
+                    }
+                    if now.duration_since(bucket.last_refill) > Duration::from_secs(10) {
+                        evicted += 1;
+                        return false;
+                    }
+                    true
+                });
+            }
         }
 
         // New client — allocate only on first sight
@@ -231,9 +246,10 @@ impl RogueDetector {
             }
         }
 
-        // Reject new clients if counter map exceeds cap (anti-spoofing)
+        // Evict stale entries if counter map exceeds cap (anti-spoofing)
         if !self.counters.contains_key(client_id) && self.counters.len() >= MAX_RATE_LIMIT_BUCKETS {
-            return false;
+            self.counters
+                .retain(|_, (_, start)| now.duration_since(*start) < self.window);
         }
 
         let mut entry = self.counters.entry(client_id.to_vec()).or_insert((0, now));

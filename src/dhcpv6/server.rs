@@ -504,7 +504,7 @@ impl<H: HaBackend> DhcpV6Server<H> {
                             lease_time: 86400,
                             state: LeaseState::Declined,
                             start_time: now_epoch,
-                            expire_time: now_epoch + 86400,
+                            expire_time: now_epoch.saturating_add(86400),
                             expires_at: Instant::now() + Duration::from_secs(86400),
                             subnet: subnet_name,
                         };
@@ -710,7 +710,7 @@ impl<H: HaBackend> DhcpV6Server<H> {
                 lease_time,
                 state: LeaseState::Bound,
                 start_time: now_epoch,
-                expire_time: now_epoch + lease_time as u64,
+                expire_time: now_epoch.saturating_add(lease_time as u64),
                 expires_at: Instant::now() + Duration::from_secs(lease_time as u64),
                 subnet: subnet.network.clone(),
             };
@@ -806,7 +806,7 @@ impl<H: HaBackend> DhcpV6Server<H> {
                 lease_time,
                 state: LeaseState::Bound,
                 start_time: now_epoch,
-                expire_time: now_epoch + lease_time as u64,
+                expire_time: now_epoch.saturating_add(lease_time as u64),
                 expires_at: Instant::now() + Duration::from_secs(lease_time as u64),
                 subnet: subnet.network.clone(),
             };
@@ -883,7 +883,7 @@ impl<H: HaBackend> DhcpV6Server<H> {
                     lease_time,
                     state: LeaseState::Bound,
                     start_time: now_epoch,
-                    expire_time: now_epoch + lease_time as u64,
+                    expire_time: now_epoch.saturating_add(lease_time as u64),
                     expires_at: Instant::now() + Duration::from_secs(lease_time as u64),
                     subnet: subnet.network.clone(),
                 };
@@ -966,7 +966,7 @@ impl<H: HaBackend> DhcpV6Server<H> {
                     lease_time,
                     state: LeaseState::Bound,
                     start_time: now_epoch,
-                    expire_time: now_epoch + lease_time as u64,
+                    expire_time: now_epoch.saturating_add(lease_time as u64),
                     expires_at: Instant::now() + Duration::from_secs(lease_time as u64),
                     subnet: subnet.network.clone(),
                 };

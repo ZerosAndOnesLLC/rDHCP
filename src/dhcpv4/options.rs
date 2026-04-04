@@ -309,7 +309,12 @@ impl DhcpOption {
         for opt in options {
             let needed = opt.serialized_len();
             if pos + needed > buf.len() {
-                // Not enough space — stop adding options to prevent panic
+                tracing::warn!(
+                    option_code = opt.code(),
+                    remaining_bytes = buf.len() - pos,
+                    needed_bytes = needed,
+                    "DHCPv4 option truncated: buffer too small"
+                );
                 break;
             }
             pos += opt.serialize(&mut buf[pos..]);

@@ -123,6 +123,12 @@ impl HaMessage {
     /// Encode a message as a length-prefixed JSON frame
     pub fn encode(&self) -> Result<Vec<u8>, serde_json::Error> {
         let json = serde_json::to_vec(self)?;
+        if json.len() > 10 * 1024 * 1024 {
+            return Err(serde_json::Error::io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "HA message too large (>10MB)",
+            )));
+        }
         let len = json.len() as u32;
         let mut buf = Vec::with_capacity(4 + json.len());
         buf.extend_from_slice(&len.to_be_bytes());
