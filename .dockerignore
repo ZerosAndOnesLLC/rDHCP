@@ -1,0 +1,11 @@
+.git
+.gitignore
+.github
+.env
+.env.*
+target
+*.md
+!README.md
+.dockerignore
+Dockerfile
+.claude

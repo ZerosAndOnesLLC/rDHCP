@@ -1,6 +1,6 @@
 [package]
 name = "rdhcpd"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 description = "High-performance DHCP server with built-in HA support. Dual-stack (DHCPv4/DHCPv6), active/active and Raft HA, single binary, no external DB."
 license = "MIT"
@@ -50,6 +50,9 @@ base64 = "0.22"
 
 # Constant-time comparison (API key)
 subtle = "2"
+
+# Zero secrets on drop
+zeroize = { version = "1", features = ["derive", "serde"] }
 
 # Random number generation (DDNS transaction IDs)
 rand = "0.9"

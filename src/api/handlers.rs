@@ -69,53 +69,74 @@ pub async fn list_leases<H: HaBackend>(
     State(state): State<Arc<ApiState<H>>>,
     Query(query): Query<LeaseQuery>,
 ) -> Json<Vec<LeaseResponse>> {
-    let limit = query.limit.unwrap_or(1000).min(10_000);
+    let limit = query.limit.unwrap_or(1000).min(5_000);
     let offset = query.offset.unwrap_or(0);
+
+    // Build an iterator that applies filters lazily before collecting,
+    // avoiding allocation of the full unfiltered set.
+    let mac_filter = query.mac.as_ref().map(|m| m.to_lowercase());
+    let state_filter = query.state.clone();
+
+    let filter_and_convert = move |lease: crate::lease::types::Lease| -> Option<LeaseResponse> {
+        // Apply MAC filter before conversion
+        if let Some(ref mf) = mac_filter {
+            match &lease.mac {
+                Some(m) => {
+                    let mac_str = format!(
+                        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                        m[0], m[1], m[2], m[3], m[4], m[5]
+                    );
+                    if mac_str != *mf {
+                        return None;
+                    }
+                }
+                None => return None,
+            }
+        }
+        // Apply state filter before conversion
+        if let Some(ref sf) = state_filter {
+            let state_str = match lease.state {
+                crate::lease::types::LeaseState::Offered => "offered",
+                crate::lease::types::LeaseState::Bound => "bound",
+                crate::lease::types::LeaseState::Expired => "expired",
+                crate::lease::types::LeaseState::Released => "released",
+                crate::lease::types::LeaseState::Declined => "declined",
+            };
+            if state_str != sf.as_str() {
+                return None;
+            }
+        }
+        Some(lease_to_response(lease))
+    };
 
     let leases: Vec<LeaseResponse> = if let Some(ref subnet) = query.subnet {
         state
             .lease_store
             .leases_for_subnet(subnet)
             .into_iter()
-            .map(lease_to_response)
+            .filter_map(filter_and_convert)
+            .skip(offset)
+            .take(limit)
             .collect()
     } else {
-        // Get all leases (iterate all subnets via allocators)
-        let mut all = Vec::new();
-        for subnet_key in state.allocators.keys() {
-            let subnet_leases = state.lease_store.leases_for_subnet(subnet_key);
-            all.extend(subnet_leases.into_iter().map(lease_to_response));
+        let mut all = Vec::with_capacity(limit);
+        let mut skipped = 0usize;
+        'outer: for subnet_key in state.allocators.keys() {
+            for lease in state.lease_store.leases_for_subnet(subnet_key) {
+                if let Some(resp) = filter_and_convert(lease) {
+                    if skipped < offset {
+                        skipped += 1;
+                        continue;
+                    }
+                    all.push(resp);
+                    if all.len() >= limit {
+                        break 'outer;
+                    }
+                }
+            }
         }
         all
     };
-
-    // Apply MAC filter
-    let leases: Vec<LeaseResponse> = if let Some(ref mac_filter) = query.mac {
-        let mac_lower = mac_filter.to_lowercase();
-        leases
-            .into_iter()
-            .filter(|l| {
-                l.mac
-                    .as_ref()
-                    .is_some_and(|m| m.to_lowercase() == mac_lower)
-            })
-            .collect()
-    } else {
-        leases
-    };
-
-    // Apply state filter
-    let leases: Vec<LeaseResponse> = if let Some(ref state_filter) = query.state {
-        leases
-            .into_iter()
-            .filter(|l| l.state == *state_filter)
-            .collect()
-    } else {
-        leases
-    };
-
-    // Apply pagination
-    let leases: Vec<LeaseResponse> = leases.into_iter().skip(offset).take(limit).collect();
 
     Json(leases)
 }

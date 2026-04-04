@@ -491,6 +491,10 @@ impl<H: HaBackend> DhcpV6Server<H> {
                         warn!(ip = %ia_addr.addr, "DHCPv6 address declined (possible conflict)");
                         // Mark as declined — keep allocated so it's not reassigned
                         let ip = IpAddr::V6(ia_addr.addr);
+                        let subnet_name: Arc<str> = self.subnets.iter()
+                            .find(|s| !s.is_pd && ip_in_subnet(&ip, &IpAddr::V6(s.network_addr), s.prefix_len))
+                            .map(|s| s.network.clone())
+                            .unwrap_or_else(|| Arc::from("unknown"));
                         let now_epoch = epoch_now();
                         let lease = Lease {
                             ip,
@@ -502,7 +506,7 @@ impl<H: HaBackend> DhcpV6Server<H> {
                             start_time: now_epoch,
                             expire_time: now_epoch + 86400,
                             expires_at: Instant::now() + Duration::from_secs(86400),
-                            subnet: Arc::from(""),
+                            subnet: subnet_name,
                         };
                         self.wal.log_upsert(&lease).await?;
                         self.lease_store.upsert(lease);
@@ -1063,13 +1067,8 @@ pub fn generate_server_duid() -> Vec<u8> {
         .as_secs();
     let duid_time = (now - epoch_2000) as u32;
     duid.extend_from_slice(&duid_time.to_be_bytes());
-    // Link-layer address: random 6 bytes (locally administered)
-    let mut mac = [0u8; 6];
-    // Use process ID and time for pseudo-random MAC
-    let seed = now ^ std::process::id() as u64;
-    for (i, byte) in mac.iter_mut().enumerate() {
-        *byte = ((seed >> (i * 8)) & 0xFF) as u8;
-    }
+    // Link-layer address: cryptographically random 6 bytes (locally administered)
+    let mut mac: [u8; 6] = rand::random();
     mac[0] = (mac[0] & 0xFC) | 0x02; // Set locally administered bit
     duid.extend_from_slice(&mac);
     duid

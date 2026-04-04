@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use zeroize::Zeroizing;
 
 /// Top-level DHCP server configuration.
 #[derive(Debug, Deserialize, Clone)]
@@ -57,8 +58,8 @@ pub struct GlobalConfig {
 pub struct ApiConfig {
     /// Socket address to bind the API server to (e.g. "0.0.0.0:8080").
     pub listen: String,
-    /// Optional API key for request authentication.
-    pub api_key: Option<String>,
+    /// Optional API key for request authentication (zeroed on drop).
+    pub api_key: Option<Zeroizing<String>>,
 }
 
 /// High-availability mode configuration.
@@ -91,6 +92,11 @@ pub enum HaConfig {
         tls_key: Option<String>,
         /// TLS CA certificate for peer verification
         tls_ca: Option<String>,
+        /// Explicit opt-in to run without TLS (peer traffic unencrypted)
+        #[serde(default)]
+        tls_insecure: bool,
+        /// Expected TLS server name for peer certificate verification
+        tls_server_name: Option<String>,
     },
 
     /// Raft consensus-based replication across multiple nodes.
@@ -106,6 +112,11 @@ pub enum HaConfig {
         tls_key: Option<String>,
         /// TLS CA certificate for peer verification
         tls_ca: Option<String>,
+        /// Explicit opt-in to run without TLS (peer traffic unencrypted)
+        #[serde(default)]
+        tls_insecure: bool,
+        /// Expected TLS server name for peer certificate verification
+        tls_server_name: Option<String>,
     },
 }
 
@@ -203,8 +214,8 @@ pub struct DdnsConfig {
     pub tsig_key: Option<String>,
     /// TSIG algorithm (e.g. "hmac-sha256").
     pub tsig_algorithm: Option<String>,
-    /// Base64-encoded TSIG shared secret.
-    pub tsig_secret: Option<String>,
+    /// Base64-encoded TSIG shared secret (zeroed on drop).
+    pub tsig_secret: Option<Zeroizing<String>>,
     /// TTL in seconds for created DNS records.
     #[serde(default = "default_ddns_ttl")]
     pub ttl: u32,

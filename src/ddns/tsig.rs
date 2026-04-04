@@ -19,15 +19,13 @@ pub struct TsigKey {
 
 /// Sign a DNS message with TSIG.
 /// Appends the TSIG RR to the additional section and increments ARCOUNT.
-pub fn sign_message(message: &mut Vec<u8>, key: &TsigKey, msg_id: u16) {
+/// Returns an error if the TSIG secret is invalid — callers must not send
+/// unsigned updates when TSIG is configured.
+pub fn sign_message(message: &mut Vec<u8>, key: &TsigKey, msg_id: u16) -> Result<(), String> {
     // Decode the base64 secret
-    let secret = match base64::engine::general_purpose::STANDARD.decode(key.secret.trim()) {
-        Ok(s) => s,
-        Err(_) => {
-            tracing::warn!("invalid base64 TSIG secret, skipping signing");
-            return;
-        }
-    };
+    let secret = base64::engine::general_purpose::STANDARD
+        .decode(key.secret.trim())
+        .map_err(|e| format!("invalid base64 TSIG secret: {}", e))?;
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -52,10 +50,17 @@ pub fn sign_message(message: &mut Vec<u8>, key: &TsigKey, msg_id: u16) {
     // TTL = 0
     mac_input.extend_from_slice(&0u32.to_be_bytes());
 
-    // Algorithm name (wire format)
+    // Algorithm name (wire format) — reject or warn on deprecated algorithms
     let alg_name = match key.algorithm.as_str() {
         "hmac-sha256" => "hmac-sha256",
         "hmac-sha512" => "hmac-sha512",
+        "hmac-md5" | "hmac-md5.sig-alg.reg.int" => {
+            return Err("HMAC-MD5 is deprecated and rejected — use hmac-sha256 or hmac-sha512".to_string());
+        }
+        "hmac-sha1" => {
+            tracing::warn!("TSIG algorithm hmac-sha1 is deprecated — consider upgrading to hmac-sha256");
+            "hmac-sha1"
+        }
         other => other,
     };
     let alg_wire = encode_name(alg_name);
@@ -136,4 +141,6 @@ pub fn sign_message(message: &mut Vec<u8>, key: &TsigKey, msg_id: u16) {
     let arcount = u16::from_be_bytes([message[10], message[11]]);
     let new_arcount = arcount + 1;
     message[10..12].copy_from_slice(&new_arcount.to_be_bytes());
+
+    Ok(())
 }

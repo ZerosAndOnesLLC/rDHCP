@@ -8,6 +8,10 @@ use std::time::{Duration, Instant};
 use dashmap::DashMap;
 use tracing::warn;
 
+/// Maximum number of tracked clients before we start rejecting unknown clients.
+/// Prevents memory exhaustion from MAC/DUID spoofing attacks.
+const MAX_RATE_LIMIT_BUCKETS: usize = 100_000;
+
 /// Per-client rate limiter using token bucket algorithm.
 /// Keyed by MAC address (6 bytes) for DHCPv4 or client DUID for DHCPv6.
 pub struct RateLimiter {
@@ -64,6 +68,11 @@ impl RateLimiter {
                 bucket.tokens -= 1.0;
                 return true;
             }
+            return false;
+        }
+
+        // Reject new clients if bucket count exceeds cap (anti-spoofing)
+        if self.buckets.len() >= MAX_RATE_LIMIT_BUCKETS {
             return false;
         }
 
@@ -220,6 +229,11 @@ impl RogueDetector {
                 self.counters
                     .retain(|_, (_, start)| now.duration_since(*start) < self.window * 2);
             }
+        }
+
+        // Reject new clients if counter map exceeds cap (anti-spoofing)
+        if !self.counters.contains_key(client_id) && self.counters.len() >= MAX_RATE_LIMIT_BUCKETS {
+            return false;
         }
 
         let mut entry = self.counters.entry(client_id.to_vec()).or_insert((0, now));

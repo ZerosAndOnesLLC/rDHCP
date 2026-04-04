@@ -165,9 +165,20 @@ pub enum Dhcpv6Option {
     Unknown(u16, Vec<u8>),
 }
 
+/// Maximum nesting depth for recursive option parsing.
+/// Prevents stack overflow from crafted packets with deeply nested container options.
+const MAX_OPTION_DEPTH: u8 = 4;
+
 impl Dhcpv6Option {
     /// Parse all options from a byte slice
     pub fn parse_all(data: &[u8]) -> Result<Vec<Dhcpv6Option>, Dhcpv6PacketError> {
+        Self::parse_all_inner(data, 0)
+    }
+
+    fn parse_all_inner(data: &[u8], depth: u8) -> Result<Vec<Dhcpv6Option>, Dhcpv6PacketError> {
+        if depth > MAX_OPTION_DEPTH {
+            return Err(Dhcpv6PacketError::MalformedOption(0));
+        }
         let mut options = Vec::with_capacity(8);
         let mut pos = 0;
 
@@ -208,7 +219,7 @@ impl Dhcpv6Option {
                         opt_data[10],
                         opt_data[11],
                     ]);
-                    let sub_opts = Self::parse_all(&opt_data[12..])?;
+                    let sub_opts = Self::parse_all_inner(&opt_data[12..], depth + 1)?;
                     Dhcpv6Option::IaNa(IaNa {
                         iaid,
                         t1,
@@ -235,7 +246,7 @@ impl Dhcpv6Option {
                         opt_data[22],
                         opt_data[23],
                     ]);
-                    let sub_opts = Self::parse_all(&opt_data[24..])?;
+                    let sub_opts = Self::parse_all_inner(&opt_data[24..], depth + 1)?;
                     Dhcpv6Option::IaAddr(IaAddr {
                         addr,
                         preferred_lifetime: preferred,
@@ -265,7 +276,7 @@ impl Dhcpv6Option {
                         opt_data[10],
                         opt_data[11],
                     ]);
-                    let sub_opts = Self::parse_all(&opt_data[12..])?;
+                    let sub_opts = Self::parse_all_inner(&opt_data[12..], depth + 1)?;
                     Dhcpv6Option::IaPd(IaPd {
                         iaid,
                         t1,
@@ -293,7 +304,7 @@ impl Dhcpv6Option {
                     let mut prefix_bytes = [0u8; 16];
                     prefix_bytes.copy_from_slice(&opt_data[9..25]);
                     let prefix = Ipv6Addr::from(prefix_bytes);
-                    let sub_opts = Self::parse_all(&opt_data[25..])?;
+                    let sub_opts = Self::parse_all_inner(&opt_data[25..], depth + 1)?;
                     Dhcpv6Option::IaPrefix(IaPrefix {
                         preferred_lifetime: preferred,
                         valid_lifetime: valid,
@@ -370,12 +381,53 @@ impl Dhcpv6Option {
     }
 
     /// Serialize all options into a buffer. Returns bytes written.
+    /// Stops writing if the buffer is too small for the next option.
     pub fn serialize_all(options: &[Dhcpv6Option], buf: &mut [u8]) -> usize {
         let mut pos = 0;
         for opt in options {
+            let needed = opt.serialized_len();
+            if pos + needed > buf.len() {
+                break;
+            }
             pos += opt.serialize(&mut buf[pos..]);
         }
         pos
+    }
+
+    /// Returns the number of bytes this option will occupy when serialized.
+    fn serialized_len(&self) -> usize {
+        match self {
+            Dhcpv6Option::ClientId(data) | Dhcpv6Option::ServerId(data) => 4 + data.len(),
+            Dhcpv6Option::IaNa(ia) => {
+                let sub_len: usize = ia.options.iter().map(|o| o.serialized_len()).sum();
+                4 + 12 + sub_len
+            }
+            Dhcpv6Option::IaAddr(ia_addr) => {
+                let sub_len: usize = ia_addr.options.iter().map(|o| o.serialized_len()).sum();
+                4 + 24 + sub_len
+            }
+            Dhcpv6Option::IaPd(ia) => {
+                let sub_len: usize = ia.options.iter().map(|o| o.serialized_len()).sum();
+                4 + 12 + sub_len
+            }
+            Dhcpv6Option::IaPrefix(ia_prefix) => {
+                let sub_len: usize = ia_prefix.options.iter().map(|o| o.serialized_len()).sum();
+                4 + 25 + sub_len
+            }
+            Dhcpv6Option::OptionRequest(codes) => 4 + codes.len() * 2,
+            Dhcpv6Option::Preference(_) => 5,
+            Dhcpv6Option::ElapsedTime(_) => 6,
+            Dhcpv6Option::StatusCode(_, msg) => 4 + 2 + msg.len(),
+            Dhcpv6Option::RapidCommit => 4,
+            Dhcpv6Option::DnsServers(addrs) => 4 + addrs.len() * 16,
+            Dhcpv6Option::DomainList(domains) => {
+                let encoded_len: usize = domains.iter().map(|d| d.split('.').map(|l| 1 + l.len()).sum::<usize>() + 1).sum();
+                4 + encoded_len
+            }
+            Dhcpv6Option::RelayMessage(data)
+            | Dhcpv6Option::InterfaceId(data)
+            | Dhcpv6Option::Unknown(_, data) => 4 + data.len(),
+        }
     }
 
     /// Serialize a single option. Returns bytes written.

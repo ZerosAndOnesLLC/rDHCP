@@ -614,6 +614,12 @@ impl<H: HaBackend> DhcpV4Server<H> {
                 "IP declined (possible conflict)"
             );
 
+            // Determine subnet for this IP
+            let subnet_name: Arc<str> = self.subnets.iter()
+                .find(|s| ip_in_subnet(&ip, &IpAddr::V4(s.network_addr), s.prefix_len))
+                .map(|s| Arc::clone(&s.network))
+                .unwrap_or_else(|| Arc::from("unknown"));
+
             // Mark as declined in lease store — don't release from allocator
             // so this IP won't be reassigned
             let now_epoch = SystemTime::now()
@@ -631,7 +637,7 @@ impl<H: HaBackend> DhcpV4Server<H> {
                 start_time: now_epoch,
                 expire_time: now_epoch + 86400,
                 expires_at: Instant::now() + Duration::from_secs(86400),
-                subnet: Arc::from(""),
+                subnet: subnet_name,
             };
 
             self.wal.log_upsert(&lease).await?;
@@ -667,15 +673,7 @@ impl<H: HaBackend> DhcpV4Server<H> {
 
     /// Count active leases held by a MAC across all subnets.
     fn count_active_leases_for_mac(&self, mac: &[u8; 6]) -> usize {
-        // The MAC index only tracks the latest IP per MAC, so for an accurate
-        // count we check the lease store directly. For typical networks (1 lease
-        // per MAC) this is a fast path; the O(n) scan only matters when someone
-        // is trying to accumulate leases.
-        if let Some(lease) = self.lease_store.get_by_mac(mac) {
-            if lease.is_active() { 1 } else { 0 }
-        } else {
-            0
-        }
+        self.lease_store.count_active_for_mac(mac)
     }
 
     /// Select the appropriate subnet for a packet.

@@ -62,8 +62,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!(subnets = allocators.len(), "subnet allocators initialized");
 
     // Initialize HA backend
-    // TODO: select based on config.ha (active-active / raft)
-    let ha: Arc<StandaloneBackend> = Arc::new(StandaloneBackend);
+    let ha: Arc<StandaloneBackend> = match &config.ha {
+        rdhcpd::config::HaConfig::Standalone => Arc::new(StandaloneBackend),
+        rdhcpd::config::HaConfig::ActiveActive { .. } => {
+            error!("active-active HA mode is not yet implemented — refusing to start in standalone silently");
+            std::process::exit(1);
+        }
+        rdhcpd::config::HaConfig::Raft { .. } => {
+            error!("raft HA mode is not yet implemented — refusing to start in standalone silently");
+            std::process::exit(1);
+        }
+    };
 
     // Initialize security: rate limiters and rogue detector
     let rate_limiter = Arc::new(RateLimiter::new(
@@ -116,7 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             allocators: allocators.clone(),
             ha: ha.clone(),
             wal: wal.clone(),
-            api_key: api_config.api_key.clone(),
+            api_key: api_config.api_key.as_deref().map(|s| s.to_string()),
         });
 
         let listen = api_config.listen.clone();
@@ -152,11 +161,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Number of receive workers per protocol
     let worker_count = config.global.workers;
 
-    // DHCPv4 port — default 67, override with RDHCPD_V4_PORT for benchmarking
+    // DHCPv4 port — default 67
+    // RDHCPD_V4_PORT: override for testing/benchmarking only (not for production)
     let dhcpv4_port: u16 = std::env::var("RDHCPD_V4_PORT")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(67);
+    if dhcpv4_port != 67 {
+        warn!(port = dhcpv4_port, "RDHCPD_V4_PORT override active — not for production use");
+    }
 
     // Start DHCPv4 server if v4 subnets configured
     let mut dhcpv4_handles = Vec::new();

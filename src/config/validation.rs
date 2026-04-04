@@ -163,6 +163,7 @@ fn validate_ha(config: &Config) -> Result<(), ConfigError> {
             tls_cert,
             tls_key,
             tls_ca,
+            tls_insecure,
             ..
         } => {
             if *scope_split <= 0.0 || *scope_split >= 1.0 {
@@ -170,7 +171,7 @@ fn validate_ha(config: &Config) -> Result<(), ConfigError> {
                     "ha scope_split must be between 0.0 and 1.0 exclusive".to_string(),
                 ));
             }
-            validate_tls_config(tls_cert, tls_key, tls_ca, "active-active")?;
+            validate_tls_config(tls_cert, tls_key, tls_ca, *tls_insecure, "active-active")?;
             Ok(())
         }
         super::HaConfig::Raft {
@@ -178,6 +179,7 @@ fn validate_ha(config: &Config) -> Result<(), ConfigError> {
             tls_cert,
             tls_key,
             tls_ca,
+            tls_insecure,
             ..
         } => {
             if peers.is_empty() {
@@ -185,7 +187,7 @@ fn validate_ha(config: &Config) -> Result<(), ConfigError> {
                     "ha raft mode requires at least one peer".to_string(),
                 ));
             }
-            validate_tls_config(tls_cert, tls_key, tls_ca, "raft")?;
+            validate_tls_config(tls_cert, tls_key, tls_ca, *tls_insecure, "raft")?;
             Ok(())
         }
     }
@@ -195,6 +197,7 @@ fn validate_tls_config(
     cert: &Option<String>,
     key: &Option<String>,
     ca: &Option<String>,
+    insecure: bool,
     mode: &str,
 ) -> Result<(), ConfigError> {
     // All three must be present together, or none
@@ -209,15 +212,22 @@ fn validate_tls_config(
                 mode
             )));
         }
-    } else {
-        // No TLS configured — warn loudly since peer traffic is unencrypted
+    } else if insecure {
+        // Explicit opt-in to insecure mode
         warn!(
             mode,
-            "HA {} mode configured WITHOUT TLS — lease sync traffic \
-             (MACs, IPs, hostnames) will travel unencrypted between peers. \
-             Configure tls_cert, tls_key, and tls_ca for production use.",
+            "HA {} mode running WITHOUT TLS (tls_insecure=true) — lease sync traffic \
+             (MACs, IPs, hostnames) will travel unencrypted between peers.",
             mode
         );
+    } else {
+        // No TLS and no explicit opt-in — refuse to start
+        return Err(ConfigError::Validation(format!(
+            "ha {} mode: TLS is required for peer communication. \
+             Configure tls_cert, tls_key, and tls_ca, or set tls_insecure=true \
+             to explicitly allow unencrypted peer traffic (not recommended).",
+            mode
+        )));
     }
 
     Ok(())

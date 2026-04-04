@@ -29,6 +29,8 @@ pub struct ActiveActiveBackend {
     state: RwLock<FailoverState>,
     /// TLS configuration for peer communication
     tls_config: Option<Arc<TlsConfig>>,
+    /// Expected TLS server name for peer certificate verification
+    tls_server_name: String,
     /// Lease store reference for bulk sync
     lease_store: LeaseStore,
     /// Last heartbeat received from peer (epoch millis)
@@ -55,6 +57,7 @@ impl ActiveActiveBackend {
         partner_down_delay: u32,
         lease_store: LeaseStore,
         tls_config: Option<Arc<TlsConfig>>,
+        tls_server_name: Option<String>,
     ) -> Self {
         let (peer_tx, peer_rx) = mpsc::channel(1024);
         Self {
@@ -69,6 +72,7 @@ impl ActiveActiveBackend {
                 entered_interrupted: None,
             }),
             tls_config,
+            tls_server_name: tls_server_name.unwrap_or_else(|| "rdhcpd-peer".to_string()),
             lease_store,
             last_heartbeat: AtomicU64::new(0),
             peer_tx,
@@ -150,7 +154,7 @@ impl ActiveActiveBackend {
         tcp.set_nodelay(true)?;
 
         let tls_config = self.tls_config.as_ref().ok_or("TLS not configured")?;
-        let server_name = rustls::pki_types::ServerName::try_from("rdhcpd-peer")?;
+        let server_name = rustls::pki_types::ServerName::try_from(self.tls_server_name.clone())?;
         let mut tls_stream = tls_config.connector.connect(server_name, tcp).await?;
 
         info!(peer = %self.peer_addr, "mTLS connection established to peer");

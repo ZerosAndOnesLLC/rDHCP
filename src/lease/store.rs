@@ -201,6 +201,17 @@ impl LeaseStore {
             .is_some_and(|r| r.is_active())
     }
 
+    /// Count all active leases held by a given MAC address across all subnets.
+    pub fn count_active_for_mac(&self, mac: &[u8; 6]) -> usize {
+        self.inner
+            .leases
+            .iter()
+            .filter(|r| {
+                r.value().is_active() && r.value().mac.as_ref() == Some(mac)
+            })
+            .count()
+    }
+
     /// Return all active (Offered or Bound) leases. Used for WAL compaction.
     pub fn all_active_leases(&self) -> Vec<Lease> {
         self.inner

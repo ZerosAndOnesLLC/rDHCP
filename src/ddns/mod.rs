@@ -157,7 +157,7 @@ async fn ddns_worker(config: Arc<DdnsConfig>, mut rx: mpsc::Receiver<DdnsRequest
                         IpAddr::V6(_) => DnsType::AAAA,
                     };
 
-                    let update = build_update(
+                    let update = match build_update(
                         forward_zone,
                         &hostname,
                         rr_type,
@@ -166,7 +166,13 @@ async fn ddns_worker(config: Arc<DdnsConfig>, mut rx: mpsc::Receiver<DdnsRequest
                         &ip_to_rdata(&ip),
                         false,
                         tsig_key.as_ref(),
-                    );
+                    ) {
+                        Ok(u) => u,
+                        Err(e) => {
+                            error!(error = %e, "TSIG signing failed, refusing to send unsigned forward update");
+                            continue;
+                        }
+                    };
 
                     if let Err(e) = send_update(&socket, &dns_server, &update).await {
                         warn!(hostname = %hostname, ip = %ip, error = %e, "forward DDNS update failed");
@@ -185,7 +191,7 @@ async fn ddns_worker(config: Arc<DdnsConfig>, mut rx: mpsc::Receiver<DdnsRequest
                     let ptr_name = reverse_name(&ip);
                     let ptr_data = dns::encode_name(&format!("{}.", hostname));
 
-                    let update = build_update(
+                    let update = match build_update(
                         rev_zone,
                         &ptr_name,
                         DnsType::PTR,
@@ -194,7 +200,13 @@ async fn ddns_worker(config: Arc<DdnsConfig>, mut rx: mpsc::Receiver<DdnsRequest
                         &ptr_data,
                         false,
                         tsig_key.as_ref(),
-                    );
+                    ) {
+                        Ok(u) => u,
+                        Err(e) => {
+                            error!(error = %e, "TSIG signing failed, refusing to send unsigned reverse update");
+                            continue;
+                        }
+                    };
 
                     if let Err(e) = send_update(&socket, &dns_server, &update).await {
                         warn!(ip = %ip, error = %e, "reverse DDNS update failed");
@@ -212,7 +224,7 @@ async fn ddns_worker(config: Arc<DdnsConfig>, mut rx: mpsc::Receiver<DdnsRequest
                         IpAddr::V6(_) => DnsType::AAAA,
                     };
 
-                    let update = build_update(
+                    let update = match build_update(
                         forward_zone,
                         &hostname,
                         rr_type,
@@ -221,7 +233,13 @@ async fn ddns_worker(config: Arc<DdnsConfig>, mut rx: mpsc::Receiver<DdnsRequest
                         &[],
                         true,
                         tsig_key.as_ref(),
-                    );
+                    ) {
+                        Ok(u) => u,
+                        Err(e) => {
+                            error!(error = %e, "TSIG signing failed, refusing to send unsigned forward delete");
+                            continue;
+                        }
+                    };
 
                     if let Err(e) = send_update(&socket, &dns_server, &update).await {
                         warn!(hostname = %hostname, error = %e, "forward DDNS delete failed");
@@ -239,7 +257,7 @@ async fn ddns_worker(config: Arc<DdnsConfig>, mut rx: mpsc::Receiver<DdnsRequest
                 if let Some(rev_zone) = reverse_zone {
                     let ptr_name = reverse_name(&ip);
 
-                    let update = build_update(
+                    let update = match build_update(
                         rev_zone,
                         &ptr_name,
                         DnsType::PTR,
@@ -248,7 +266,13 @@ async fn ddns_worker(config: Arc<DdnsConfig>, mut rx: mpsc::Receiver<DdnsRequest
                         &[],
                         true,
                         tsig_key.as_ref(),
-                    );
+                    ) {
+                        Ok(u) => u,
+                        Err(e) => {
+                            error!(error = %e, "TSIG signing failed, refusing to send unsigned reverse delete");
+                            continue;
+                        }
+                    };
 
                     if let Err(e) = send_update(&socket, &dns_server, &update).await {
                         warn!(ip = %ip, error = %e, "reverse DDNS delete failed");
@@ -271,7 +295,7 @@ fn build_update(
     rdata: &[u8],
     is_delete: bool,
     tsig_key: Option<&tsig::TsigKey>,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, String> {
     let id: u16 = rand::random();
 
     let mut msg = DnsMessage::new(id, DnsOpcode::Update);
@@ -289,12 +313,12 @@ fn build_update(
 
     let mut buf = msg.encode();
 
-    // Sign with TSIG if configured
+    // Sign with TSIG if configured — refuse to send unsigned if TSIG fails
     if let Some(key) = tsig_key {
-        tsig::sign_message(&mut buf, key, id);
+        tsig::sign_message(&mut buf, key, id)?;
     }
 
-    buf
+    Ok(buf)
 }
 
 /// Send a DNS UPDATE and check the response
