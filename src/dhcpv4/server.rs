@@ -107,6 +107,9 @@ struct SubnetInfo {
     mac_acl: Arc<MacAcl>,
     /// Pre-parsed trusted relay agent source IPs. Empty = accept any relay.
     trusted_relays: Arc<[Ipv4Addr]>,
+    /// Pre-serialized generic DHCP option overrides: (code, bytes).
+    #[allow(dead_code)]
+    custom_options: Arc<[(u8, Vec<u8>)]>,
 }
 
 impl SubnetInfo {
@@ -166,6 +169,19 @@ impl<H: HaBackend> DhcpV4Server<H> {
                         .collect();
                     let mac_acl = Arc::new(MacAcl::new(allow, deny));
 
+                    // Pre-serialize generic DHCP option overrides (validation already
+                    // ran at config load; this pass is infallible but uses filter_map
+                    // defensively).
+                    let custom_options: Vec<(u8, Vec<u8>)> = s
+                        .option
+                        .iter()
+                        .filter_map(|o| {
+                            crate::config::validation::serialize_option_override(o)
+                                .ok()
+                                .map(|bytes| (o.code, bytes))
+                        })
+                        .collect();
+
                     Some(SubnetInfo {
                         network: Arc::from(s.network.as_str()),
                         network_addr: v4,
@@ -173,6 +189,7 @@ impl<H: HaBackend> DhcpV4Server<H> {
                         config: Arc::new(s.clone()),
                         mac_acl,
                         trusted_relays: Arc::from(SubnetInfo::parse_trusted_relays(s)),
+                        custom_options: Arc::from(custom_options),
                     })
                 } else {
                     None
@@ -1173,6 +1190,7 @@ mod relay_gate_tests {
             dns: vec![],
             ntp: vec![],
             domain: None,
+            option: vec![],
             ip_probe: false,
             ip_probe_timeout_ms: None,
             max_leases_per_mac: 1,
@@ -1188,6 +1206,7 @@ mod relay_gate_tests {
             config: Arc::new(cfg),
             mac_acl: Arc::new(MacAcl::new(vec![], vec![])),
             trusted_relays: Arc::from(trusted.as_slice()),
+            custom_options: Arc::from(Vec::<(u8, Vec<u8>)>::new()),
         }
     }
 
@@ -1229,6 +1248,7 @@ mod subnet_info_tests {
             dns: vec![],
             ntp: vec![],
             domain: None,
+            option: vec![],
             ip_probe: false,
             ip_probe_timeout_ms: None,
             max_leases_per_mac: 1,

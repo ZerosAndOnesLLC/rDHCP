@@ -196,6 +196,37 @@ pub struct SubnetConfig {
     /// Static address reservations for specific clients.
     #[serde(default)]
     pub reservation: Vec<ReservationConfig>,
+
+    // Extended options
+    /// Generic DHCP option overrides for this subnet.
+    #[serde(default)]
+    pub option: Vec<OptionOverride>,
+}
+
+/// Per-subnet generic DHCP option override. Exactly ONE of the value
+/// fields must be set; the rest must be None.
+#[derive(Debug, Deserialize, Clone)]
+pub struct OptionOverride {
+    /// DHCP option code (RFC 2132 registry).
+    pub code: u8,
+    /// Single IPv4 address (4 bytes on wire).
+    pub ip: Option<String>,
+    /// List of IPv4 addresses (n*4 bytes on wire).
+    #[serde(default)]
+    pub ips: Option<Vec<String>>,
+    /// ASCII string value.
+    pub string: Option<String>,
+    /// Unsigned 8-bit integer.
+    #[serde(rename = "u8")]
+    pub u8_val: Option<u8>,
+    /// Unsigned 16-bit big-endian integer.
+    #[serde(rename = "u16")]
+    pub u16_val: Option<u16>,
+    /// Unsigned 32-bit big-endian integer.
+    #[serde(rename = "u32")]
+    pub u32_val: Option<u32>,
+    /// Arbitrary bytes encoded as hex (e.g. "deadbeef").
+    pub hex: Option<String>,
 }
 
 /// Static address reservation configuration for a specific client.

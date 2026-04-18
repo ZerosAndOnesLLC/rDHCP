@@ -53,6 +53,7 @@ fn make_subnet(
         dns: vec![],
         ntp: vec![],
         domain: None,
+        option: vec![],
         ip_probe: false,
         ip_probe_timeout_ms: None,
         max_leases_per_mac: 1,
