@@ -121,6 +121,39 @@ async fn make_server(
     (server, stats)
 }
 
+async fn make_server_with_relay_limit(
+    cfg: Config,
+    burst: u32,
+    pps: f64,
+) -> (DhcpV4Server<StandaloneBackend>, Arc<DhcpV4Stats>) {
+    let dir = tempdir_path();
+    let lease_store = LeaseStore::new();
+    let allocators = Arc::new(build_allocators(&cfg, &lease_store).unwrap());
+    let wal = Arc::new(Wal::open(&dir).await.unwrap());
+    let ha = Arc::new(StandaloneBackend);
+    let server_ip = Ipv4Addr::new(10, 0, 0, 1);
+    let rate_limiter = Arc::new(RateLimiter::new(100, 100.0));
+    let relay_rate_limiter = Arc::new(RateLimiter::new(burst, pps));
+    let rogue_detector = Arc::new(RogueDetector::new(1000, 60));
+    let stats = Arc::new(DhcpV4Stats::new());
+
+    let server = DhcpV4Server::new(
+        Arc::new(cfg),
+        lease_store,
+        allocators,
+        wal,
+        ha,
+        server_ip,
+        rate_limiter,
+        None, // global rate limiter disabled
+        rogue_detector,
+        relay_rate_limiter,
+        Arc::clone(&stats),
+    );
+
+    (server, stats)
+}
+
 fn relayed_discover(giaddr: Ipv4Addr) -> DhcpV4Packet {
     let mut p = DhcpV4Packet::new_discover([0xaa; 6]);
     p.giaddr = giaddr;
@@ -256,4 +289,26 @@ async fn empty_trusted_relays_accepts_any_source() {
     assert_eq!(decision, RelayDecision::Accept);
     use std::sync::atomic::Ordering;
     assert_eq!(stats.relayed_received.load(Ordering::Relaxed), 1);
+}
+
+/// Per-relay-source rate limiter exhaustion → DroppedRateLimit.
+#[tokio::test]
+async fn relayed_packets_are_rate_limited_per_source() {
+    let subnet = make_subnet("10.0.0.0/24", "10.0.0.100", "10.0.0.200", vec![]);
+    let cfg = make_config(true, subnet);
+    // burst=1, very slow refill — second packet will exhaust the bucket
+    let (server, stats) = make_server_with_relay_limit(cfg, 1, 0.01).await;
+
+    let pkt = relayed_discover(Ipv4Addr::new(10, 0, 0, 5));
+    let relay_src = src_addr(Ipv4Addr::new(10, 0, 0, 5));
+
+    // First packet: consumes the single token → accepted
+    assert_eq!(server.classify_relayed(&pkt, relay_src), RelayDecision::Accept);
+    // Second packet: limiter empty → rate-limit drop
+    assert_eq!(server.classify_relayed(&pkt, relay_src), RelayDecision::DroppedRateLimit);
+    use std::sync::atomic::Ordering;
+    assert_eq!(
+        stats.relayed_dropped_rate_limit.load(Ordering::Relaxed),
+        1
+    );
 }
