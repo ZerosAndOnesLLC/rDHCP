@@ -2,7 +2,127 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use tracing::warn;
 
+use super::types::OptionOverride;
 use super::{Config, ConfigError};
+
+/// Decode a hex string (without separators) into bytes.
+/// Rejects odd-length strings and non-hex characters.
+fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
+    let s = s.trim();
+    if s.len() % 2 != 0 {
+        return Err(format!(
+            "hex string must have even length, got {}",
+            s.len()
+        ));
+    }
+    let mut out = Vec::with_capacity(s.len() / 2);
+    for chunk in s.as_bytes().chunks(2) {
+        let hi = (chunk[0] as char)
+            .to_digit(16)
+            .ok_or_else(|| "invalid hex char".to_string())?;
+        let lo = (chunk[1] as char)
+            .to_digit(16)
+            .ok_or_else(|| "invalid hex char".to_string())?;
+        out.push(((hi << 4) | lo) as u8);
+    }
+    Ok(out)
+}
+
+/// Serialize an `OptionOverride` value into the raw bytes that will be placed
+/// in the DHCP option payload (excluding code and length bytes).
+///
+/// Exactly one of the value fields (`ip`, `ips`, `string`, `u8_val`,
+/// `u16_val`, `u32_val`, `hex`) must be `Some`; all others must be `None`.
+pub fn serialize_option_override(o: &OptionOverride) -> Result<Vec<u8>, String> {
+    // Count how many value fields are set
+    let set_count = [
+        o.ip.is_some(),
+        o.ips.is_some(),
+        o.string.is_some(),
+        o.u8_val.is_some(),
+        o.u16_val.is_some(),
+        o.u32_val.is_some(),
+        o.hex.is_some(),
+    ]
+    .iter()
+    .filter(|&&v| v)
+    .count();
+
+    if set_count == 0 {
+        return Err("exactly one value field must be set (none found)".to_string());
+    }
+    if set_count > 1 {
+        return Err(format!(
+            "exactly one value field must be set ({} found)",
+            set_count
+        ));
+    }
+
+    if let Some(ref s) = o.ip {
+        let addr: Ipv4Addr = s
+            .parse()
+            .map_err(|_| format!("ip '{}' is not a valid IPv4 address", s))?;
+        return Ok(addr.octets().to_vec());
+    }
+
+    if let Some(ref list) = o.ips {
+        let mut bytes = Vec::with_capacity(list.len() * 4);
+        for s in list {
+            let addr: Ipv4Addr = s
+                .parse()
+                .map_err(|_| format!("ips entry '{}' is not a valid IPv4 address", s))?;
+            bytes.extend_from_slice(&addr.octets());
+        }
+        if bytes.is_empty() {
+            return Err(format!("option code {}: value cannot be empty", o.code));
+        }
+        return Ok(bytes);
+    }
+
+    if let Some(ref s) = o.string {
+        if s.len() > 255 {
+            return Err(format!(
+                "string value is {} bytes, maximum is 255",
+                s.len()
+            ));
+        }
+        if !s.bytes().all(|b| b.is_ascii_graphic() || b == b' ') {
+            return Err("string value must contain only printable ASCII characters".to_string());
+        }
+        if s.is_empty() {
+            return Err(format!("option code {}: value cannot be empty", o.code));
+        }
+        return Ok(s.as_bytes().to_vec());
+    }
+
+    if let Some(v) = o.u8_val {
+        return Ok(vec![v]);
+    }
+
+    if let Some(v) = o.u16_val {
+        return Ok(v.to_be_bytes().to_vec());
+    }
+
+    if let Some(v) = o.u32_val {
+        return Ok(v.to_be_bytes().to_vec());
+    }
+
+    if let Some(ref s) = o.hex {
+        let bytes = decode_hex(s)?;
+        if bytes.is_empty() {
+            return Err(format!("option code {}: value cannot be empty", o.code));
+        }
+        if bytes.len() > 255 {
+            return Err(format!(
+                "hex value is {} bytes, maximum is 255",
+                bytes.len()
+            ));
+        }
+        return Ok(bytes);
+    }
+
+    unreachable!("set_count == 1 but no field matched")
+}
 
 pub fn validate(config: &Config) -> Result<(), ConfigError> {
     validate_subnets(config)?;
@@ -97,6 +217,57 @@ fn validate_subnets(config: &Config) -> Result<(), ConfigError> {
                     i, subnet.network
                 )));
             }
+        }
+
+        // Validate generic DHCP option overrides
+        let mut seen_codes = std::collections::HashSet::new();
+        for (k, opt) in subnet.option.iter().enumerate() {
+            // Reserved codes the server controls, or codes that are
+            // client→server / relay→server only and must not be emitted
+            // by the server (50=RequestedIP, 55=ParameterRequestList,
+            // 57=MaxMessageSize, 82=RelayAgentInfo).
+            const RESERVED: &[u8] = &[0, 1, 28, 50, 51, 53, 54, 55, 57, 58, 59, 82, 255];
+            if RESERVED.contains(&opt.code) {
+                return Err(ConfigError::Validation(format!(
+                    "subnet[{}] option[{}]: code {} is reserved and managed by the server",
+                    i, k, opt.code
+                )));
+            }
+            // No duplicates within a subnet
+            if !seen_codes.insert(opt.code) {
+                return Err(ConfigError::Validation(format!(
+                    "subnet[{}] option[{}]: duplicate entry for code {}",
+                    i, k, opt.code
+                )));
+            }
+            // Collision with typed fields only if the typed field is non-empty
+            match opt.code {
+                3 /* router */ if subnet.router.is_some() =>
+                    return Err(ConfigError::Validation(format!(
+                        "subnet[{}] option[{}]: code 3 conflicts with `router` (set one, not both)",
+                        i, k
+                    ))),
+                6 /* dns */ if !subnet.dns.is_empty() =>
+                    return Err(ConfigError::Validation(format!(
+                        "subnet[{}] option[{}]: code 6 conflicts with `dns` (set one, not both)",
+                        i, k
+                    ))),
+                15 /* domain */ if subnet.domain.is_some() =>
+                    return Err(ConfigError::Validation(format!(
+                        "subnet[{}] option[{}]: code 15 conflicts with `domain` (set one, not both)",
+                        i, k
+                    ))),
+                42 /* ntp */ if !subnet.ntp.is_empty() =>
+                    return Err(ConfigError::Validation(format!(
+                        "subnet[{}] option[{}]: code 42 conflicts with `ntp` (set one, not both)",
+                        i, k
+                    ))),
+                _ => {}
+            }
+            // Value form + bytes validation
+            serialize_option_override(opt).map_err(|e| {
+                ConfigError::Validation(format!("subnet[{}] option[{}]: {}", i, k, e))
+            })?;
         }
 
         // Validate reservations
@@ -362,5 +533,350 @@ mod giaddr_tests {
         assert!(!is_bogon_giaddr(Ipv4Addr::new(10, 0, 0, 1)));
         assert!(!is_bogon_giaddr(Ipv4Addr::new(192, 168, 1, 1)));
         assert!(!is_bogon_giaddr(Ipv4Addr::new(172, 29, 69, 5)));
+    }
+}
+
+#[cfg(test)]
+mod option_override_tests {
+    use super::*;
+    use crate::config::types::OptionOverride;
+
+    fn base() -> OptionOverride {
+        OptionOverride {
+            code: 42,
+            ip: None,
+            ips: None,
+            string: None,
+            u8_val: None,
+            u16_val: None,
+            u32_val: None,
+            hex: None,
+        }
+    }
+
+    #[test]
+    fn exactly_one_value_required() {
+        let o = base();
+        assert!(serialize_option_override(&o).is_err()); // none
+        let o = OptionOverride {
+            ip: Some("1.2.3.4".to_string()),
+            string: Some("x".to_string()),
+            ..base()
+        };
+        assert!(serialize_option_override(&o).is_err()); // two
+    }
+
+    #[test]
+    fn ip_serializes_to_4_bytes() {
+        let o = OptionOverride {
+            ip: Some("10.0.0.1".to_string()),
+            ..base()
+        };
+        let bytes = serialize_option_override(&o).unwrap();
+        assert_eq!(bytes, vec![10, 0, 0, 1]);
+    }
+
+    #[test]
+    fn ips_serializes_to_n_times_4_bytes() {
+        let o = OptionOverride {
+            ips: Some(vec!["10.0.0.1".to_string(), "10.0.0.2".to_string()]),
+            ..base()
+        };
+        let bytes = serialize_option_override(&o).unwrap();
+        assert_eq!(bytes, vec![10, 0, 0, 1, 10, 0, 0, 2]);
+    }
+
+    #[test]
+    fn string_must_be_ascii_printable_and_255_max() {
+        let o = OptionOverride {
+            string: Some("hello".to_string()),
+            ..base()
+        };
+        assert_eq!(serialize_option_override(&o).unwrap(), b"hello".to_vec());
+        let long = "x".repeat(256);
+        let o = OptionOverride {
+            string: Some(long),
+            ..base()
+        };
+        assert!(serialize_option_override(&o).is_err());
+    }
+
+    #[test]
+    fn u8_u16_u32_big_endian() {
+        let o = OptionOverride {
+            u8_val: Some(64),
+            ..base()
+        };
+        assert_eq!(serialize_option_override(&o).unwrap(), vec![64]);
+        let o = OptionOverride {
+            u16_val: Some(0x1234),
+            ..base()
+        };
+        assert_eq!(serialize_option_override(&o).unwrap(), vec![0x12, 0x34]);
+        let o = OptionOverride {
+            u32_val: Some(0xdeadbeef),
+            ..base()
+        };
+        assert_eq!(
+            serialize_option_override(&o).unwrap(),
+            vec![0xde, 0xad, 0xbe, 0xef]
+        );
+    }
+
+    #[test]
+    fn hex_decodes_lowercase_and_uppercase() {
+        let o = OptionOverride {
+            hex: Some("deadBEEF".to_string()),
+            ..base()
+        };
+        assert_eq!(
+            serialize_option_override(&o).unwrap(),
+            vec![0xde, 0xad, 0xbe, 0xef]
+        );
+    }
+
+    #[test]
+    fn hex_rejects_odd_length_and_nonhex() {
+        let o = OptionOverride {
+            hex: Some("abc".to_string()),
+            ..base()
+        };
+        assert!(serialize_option_override(&o).is_err());
+        let o = OptionOverride {
+            hex: Some("xx".to_string()),
+            ..base()
+        };
+        assert!(serialize_option_override(&o).is_err());
+    }
+
+    #[test]
+    fn empty_hex_is_rejected() {
+        let o = OptionOverride {
+            hex: Some("".to_string()),
+            ..base()
+        };
+        assert!(serialize_option_override(&o).is_err());
+    }
+
+    #[test]
+    fn empty_ips_is_rejected() {
+        let o = OptionOverride {
+            ips: Some(vec![]),
+            ..base()
+        };
+        assert!(serialize_option_override(&o).is_err());
+    }
+
+    #[test]
+    fn empty_string_is_rejected() {
+        let o = OptionOverride {
+            string: Some("".to_string()),
+            ..base()
+        };
+        assert!(serialize_option_override(&o).is_err());
+    }
+}
+
+#[cfg(test)]
+mod config_option_tests {
+    use super::*;
+    use crate::config::{Config, ConfigError};
+
+    fn validate_toml(s: &str) -> Result<(), ConfigError> {
+        let c: Config = toml::from_str(s).map_err(ConfigError::Parse)?;
+        validate(&c)
+    }
+
+    #[test]
+    fn single_option_entry_parses_correctly() {
+        let result = validate_toml(
+            r#"
+[global]
+lease_db = "/tmp/x"
+
+[ha]
+mode = "standalone"
+
+[[subnet]]
+network = "10.0.0.0/24"
+
+[[subnet.option]]
+code = 72
+ip = "10.0.0.1"
+"#,
+        );
+        assert!(result.is_ok(), "unexpected error: {:?}", result);
+    }
+
+    #[test]
+    fn reserved_code_is_rejected() {
+        let result = validate_toml(
+            r#"
+[global]
+lease_db = "/tmp/x"
+
+[ha]
+mode = "standalone"
+
+[[subnet]]
+network = "10.0.0.0/24"
+
+[[subnet.option]]
+code = 53
+u8 = 1
+"#,
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("reserved"), "expected 'reserved' in: {}", msg);
+    }
+
+    #[test]
+    fn client_only_codes_are_rejected() {
+        // Code 50 (Requested IP) is client→server only; the server must not
+        // emit it.  Verify that all four newly-added reserved codes are blocked
+        // by testing code 50 as a representative.
+        let result = validate_toml(
+            r#"
+[global]
+lease_db = "/tmp/x"
+
+[ha]
+mode = "standalone"
+
+[[subnet]]
+network = "10.0.0.0/24"
+
+[[subnet.option]]
+code = 50
+ip = "10.0.0.5"
+"#,
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("reserved"), "expected 'reserved' in: {}", msg);
+    }
+
+    #[test]
+    fn duplicate_codes_are_rejected() {
+        let result = validate_toml(
+            r#"
+[global]
+lease_db = "/tmp/x"
+
+[ha]
+mode = "standalone"
+
+[[subnet]]
+network = "10.0.0.0/24"
+
+[[subnet.option]]
+code = 72
+ip = "10.0.0.1"
+
+[[subnet.option]]
+code = 72
+ip = "10.0.0.2"
+"#,
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("duplicate"), "expected 'duplicate' in: {}", msg);
+    }
+
+    #[test]
+    fn code_42_conflicts_with_ntp_field() {
+        let result = validate_toml(
+            r#"
+[global]
+lease_db = "/tmp/x"
+
+[ha]
+mode = "standalone"
+
+[[subnet]]
+network = "10.0.0.0/24"
+ntp = ["10.0.0.1"]
+
+[[subnet.option]]
+code = 42
+ips = ["10.0.0.2"]
+"#,
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("ntp"), "expected 'ntp' in: {}", msg);
+    }
+
+    #[test]
+    fn option_code_3_conflicts_with_typed_router() {
+        let result = validate_toml(
+            r#"
+[global]
+lease_db = "/tmp/x"
+
+[ha]
+mode = "standalone"
+
+[[subnet]]
+network = "10.0.0.0/24"
+router = "10.0.0.1"
+
+[[subnet.option]]
+code = 3
+ip = "10.0.0.2"
+"#,
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("router"), "expected 'router' in: {}", msg);
+    }
+
+    #[test]
+    fn option_code_6_conflicts_with_typed_dns() {
+        let result = validate_toml(
+            r#"
+[global]
+lease_db = "/tmp/x"
+
+[ha]
+mode = "standalone"
+
+[[subnet]]
+network = "10.0.0.0/24"
+dns = ["10.0.0.1"]
+
+[[subnet.option]]
+code = 6
+ips = ["10.0.0.2"]
+"#,
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("dns"), "expected 'dns' in: {}", msg);
+    }
+
+    #[test]
+    fn option_code_15_conflicts_with_typed_domain() {
+        let result = validate_toml(
+            r#"
+[global]
+lease_db = "/tmp/x"
+
+[ha]
+mode = "standalone"
+
+[[subnet]]
+network = "10.0.0.0/24"
+domain = "example.com"
+
+[[subnet.option]]
+code = 15
+string = "other.example"
+"#,
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("domain"), "expected 'domain' in: {}", msg);
     }
 }

@@ -5,6 +5,14 @@ All notable changes to rDHCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-04-17
+
+### Added
+- Per-subnet `ntp = [...]` field — emits DHCP option 42 (NTP servers) on offers/acks/inform. Mirrors the existing `dns` field.
+- Per-subnet `[[subnet.option]]` generic DHCP option override table. Each entry specifies a `code` plus exactly one of `ip` / `ips` / `string` / `u8` / `u16` / `u32` / `hex`. Enables setting any DHCPv4 option (e.g. TFTP 66, bootfile 67, WPAD 252, vendor 43) per subnet without a code change.
+- Config-load validation for option overrides: reserved codes rejected (0, 1, 28, 50, 51, 53, 54, 55, 57, 58, 59, 82, 255), duplicates rejected, conflicts with typed `router`/`dns`/`domain`/`ntp` rejected, empty payloads rejected, hex decoded and length-bounded (≤255 bytes).
+- (Fixes #60.)
+
 ## [0.12.5] - 2026-04-17
 
 ### Added

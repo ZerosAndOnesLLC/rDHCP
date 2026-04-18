@@ -165,6 +165,9 @@ pub struct SubnetConfig {
     /// DNS server addresses for clients.
     #[serde(default)]
     pub dns: Vec<String>,
+    /// NTP server addresses for clients (DHCP option 42).
+    #[serde(default)]
+    pub ntp: Vec<String>,
     /// DNS domain name for clients.
     pub domain: Option<String>,
 
@@ -193,6 +196,37 @@ pub struct SubnetConfig {
     /// Static address reservations for specific clients.
     #[serde(default)]
     pub reservation: Vec<ReservationConfig>,
+
+    // Extended options
+    /// Generic DHCP option overrides for this subnet.
+    #[serde(default)]
+    pub option: Vec<OptionOverride>,
+}
+
+/// Per-subnet generic DHCP option override. Exactly ONE of the value
+/// fields must be set; the rest must be None.
+#[derive(Debug, Deserialize, Clone)]
+pub struct OptionOverride {
+    /// DHCP option code (RFC 2132 registry).
+    pub code: u8,
+    /// Single IPv4 address (4 bytes on wire).
+    pub ip: Option<String>,
+    /// List of IPv4 addresses (n*4 bytes on wire).
+    #[serde(default)]
+    pub ips: Option<Vec<String>>,
+    /// ASCII string value.
+    pub string: Option<String>,
+    /// Unsigned 8-bit integer.
+    #[serde(rename = "u8")]
+    pub u8_val: Option<u8>,
+    /// Unsigned 16-bit big-endian integer.
+    #[serde(rename = "u16")]
+    pub u16_val: Option<u16>,
+    /// Unsigned 32-bit big-endian integer.
+    #[serde(rename = "u32")]
+    pub u32_val: Option<u32>,
+    /// Arbitrary bytes encoded as hex (e.g. "deadbeef").
+    pub hex: Option<String>,
 }
 
 /// Static address reservation configuration for a specific client.
@@ -450,5 +484,26 @@ trusted_relays = ["10.0.1.5", "10.0.1.6"]
         let c: Config = toml::from_str(toml).unwrap();
         assert!(c.subnet[0].trusted_relays.is_empty());
         assert_eq!(c.subnet[1].trusted_relays, vec!["10.0.1.5", "10.0.1.6"]);
+    }
+
+    #[test]
+    fn subnet_ntp_defaults_empty_and_can_be_set() {
+        let toml = r#"
+[global]
+lease_db = "/tmp/x"
+
+[ha]
+mode = "standalone"
+
+[[subnet]]
+network = "10.0.0.0/24"
+
+[[subnet]]
+network = "10.0.1.0/24"
+ntp = ["10.0.0.1", "10.0.0.2"]
+"#;
+        let c: Config = toml::from_str(toml).unwrap();
+        assert!(c.subnet[0].ntp.is_empty());
+        assert_eq!(c.subnet[1].ntp, vec!["10.0.0.1", "10.0.0.2"]);
     }
 }

@@ -75,6 +75,7 @@ max_lease_time = 172800           # cap client-requested lease time to 48h
 router = "10.0.1.1"
 dns = ["10.0.0.53", "10.0.0.54"]
 domain = "example.com"
+ntp = ["10.0.1.1"]                # NTP servers (DHCP option 42); mirrors `dns`
 
 # --- Per-Subnet Security ---
 max_leases_per_mac = 1            # max active leases per MAC (0 = unlimited)
@@ -102,6 +103,39 @@ hostname = "server"
 # client_id = "01aabbccddeef3"    # option 61 client identifier (hex)
 # ip = "10.0.1.12"
 # hostname = "laptop"
+
+# --- Generic DHCP option overrides ---
+# Per-subnet overrides for any DHCP option not covered by a typed field above.
+# Each [[subnet.option]] entry has a `code` plus EXACTLY ONE value form:
+#   ip = "1.2.3.4"                        single IPv4 (4 bytes)
+#   ips = ["1.2.3.4", "5.6.7.8"]          list of IPv4 (n*4 bytes)
+#   string = "..."                        ASCII string (<=255 bytes)
+#   u8 = 64                               single byte
+#   u16 = 1500                            big-endian u16
+#   u32 = 3600                            big-endian u32
+#   hex = "deadbeef"                      arbitrary bytes (<=255 bytes, even-length)
+# Reserved codes (server-managed): 0, 1, 28, 51, 53, 54, 58, 59, 255.
+# Codes 3/6/15/42 conflict with the typed `router`/`dns`/`domain`/`ntp` fields — set one, not both.
+#
+# [[subnet.option]]
+# code = 66                               # TFTP server name
+# string = "tftp.corp.lan"
+#
+# [[subnet.option]]
+# code = 67                               # Bootfile name
+# string = "pxelinux.0"
+#
+# [[subnet.option]]
+# code = 252                              # WPAD URL
+# string = "http://wpad.corp.lan/wpad.dat"
+#
+# [[subnet.option]]
+# code = 23                               # IP TTL
+# u8 = 64
+#
+# [[subnet.option]]
+# code = 43                               # Vendor-specific (opaque binary)
+# hex = "0108..."
 
 # -----------------------------------------------------------------------------
 # IPv6 Subnet

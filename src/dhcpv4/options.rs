@@ -79,6 +79,8 @@ pub mod code {
     pub const VENDOR_CLASS_ID: u8 = 60;
     /// Client identifier (option 61).
     pub const CLIENT_ID: u8 = 61;
+    /// NTP server addresses (option 42).
+    pub const NTP: u8 = 42;
     /// Relay agent information (option 82).
     pub const RELAY_AGENT_INFO: u8 = 82;
     /// End-of-options marker (option 255).
@@ -120,6 +122,8 @@ pub enum DhcpOption {
     VendorClassId(Vec<u8>),
     /// Client identifier (option 61).
     ClientIdentifier(Vec<u8>),
+    /// NTP server address(es) (option 42).
+    NtpServers(Vec<Ipv4Addr>),
     /// Relay agent information sub-options (option 82).
     RelayAgentInfo(Vec<u8>),
     /// Unknown option: (code, data)
@@ -190,6 +194,16 @@ impl DhcpOption {
                         .map(|c| Ipv4Addr::new(c[0], c[1], c[2], c[3]))
                         .collect();
                     DhcpOption::DnsServers(addrs)
+                }
+                code::NTP => {
+                    if opt_len % 4 != 0 || opt_len == 0 {
+                        return Err(PacketError::MalformedOption(pos));
+                    }
+                    let addrs = opt_data
+                        .chunks_exact(4)
+                        .map(|c| Ipv4Addr::new(c[0], c[1], c[2], c[3]))
+                        .collect();
+                    DhcpOption::NtpServers(addrs)
                 }
                 code::HOSTNAME => {
                     // Only accept printable ASCII hostnames; reject binary/non-ASCII data
@@ -303,12 +317,15 @@ impl DhcpOption {
 
     /// Serialize all options into a buffer. Returns bytes written.
     /// Stops writing if the buffer is too small for the next option.
+    /// Uses `>=` (not `>`) so that at least 1 byte is always left for the
+    /// END terminator (0xFF) written by the caller after this returns.
     pub fn serialize_all(options: &[DhcpOption], buf: &mut [u8]) -> usize {
         let mut pos = 0;
 
         for opt in options {
             let needed = opt.serialized_len();
-            if pos + needed > buf.len() {
+            // Reserve 1 byte for the END terminator written by the caller.
+            if pos + needed >= buf.len() {
                 tracing::warn!(
                     option_code = opt.code(),
                     remaining_bytes = buf.len() - pos,
@@ -332,6 +349,7 @@ impl DhcpOption {
             | DhcpOption::ServerIdentifier(_) => 6,
             DhcpOption::Router(addrs) => 2 + addrs.len().min(63) * 4,
             DhcpOption::DnsServers(addrs) => 2 + addrs.len().min(63) * 4,
+            DhcpOption::NtpServers(addrs) => 2 + addrs.len().min(63) * 4,
             DhcpOption::Hostname(name) => 2 + name.len().min(255),
             DhcpOption::DomainName(name) => 2 + name.len().min(255),
             DhcpOption::LeaseTime(_)
@@ -369,6 +387,16 @@ impl DhcpOption {
             }
             DhcpOption::DnsServers(addrs) => {
                 buf[0] = code::DNS;
+                let count = addrs.len().min(63);
+                let len = (count * 4) as u8;
+                buf[1] = len;
+                for (i, addr) in addrs.iter().take(count).enumerate() {
+                    buf[2 + i * 4..6 + i * 4].copy_from_slice(&addr.octets());
+                }
+                2 + len as usize
+            }
+            DhcpOption::NtpServers(addrs) => {
+                buf[0] = code::NTP;
                 let count = addrs.len().min(63);
                 let len = (count * 4) as u8;
                 buf[1] = len;
@@ -498,6 +526,7 @@ impl DhcpOption {
             DhcpOption::RebindingTime(_) => code::REBINDING_TIME,
             DhcpOption::VendorClassId(_) => code::VENDOR_CLASS_ID,
             DhcpOption::ClientIdentifier(_) => code::CLIENT_ID,
+            DhcpOption::NtpServers(_) => code::NTP,
             DhcpOption::RelayAgentInfo(_) => code::RELAY_AGENT_INFO,
             DhcpOption::Unknown(c, _) => *c,
         }
@@ -514,6 +543,49 @@ pub fn prefix_to_mask(prefix_len: u8) -> Ipv4Addr {
     }
     let mask = !((1u32 << (32 - prefix_len)) - 1);
     Ipv4Addr::from(mask.to_be_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ntp_servers_roundtrip() {
+        let opt = DhcpOption::NtpServers(vec![
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(10, 0, 0, 2),
+        ]);
+        let mut buf = [0u8; 16];
+        let len = opt.serialize(&mut buf);
+        assert_eq!(&buf[..len], &[42, 8, 10, 0, 0, 1, 10, 0, 0, 2]);
+        let parsed = DhcpOption::parse_all(&buf[..len]).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert!(matches!(parsed[0], DhcpOption::NtpServers(_)));
+    }
+
+    #[test]
+    fn ntp_servers_code_is_42() {
+        let opt = DhcpOption::NtpServers(vec![Ipv4Addr::new(1, 2, 3, 4)]);
+        assert_eq!(opt.code(), 42);
+    }
+
+    #[test]
+    fn serialize_all_reserves_room_for_end_terminator() {
+        // Craft an option whose serialized length would exactly fill the buffer.
+        // The check must reserve at least 1 byte so the caller's END-terminator
+        // write doesn't panic.
+        let opt = DhcpOption::Unknown(99, vec![0u8; 100]);
+        let needed = 2 + 100; // 102
+        let mut buf = vec![0u8; needed]; // exactly needed bytes — no room for END
+        let written = DhcpOption::serialize_all(&[opt], &mut buf);
+        // The option MUST NOT be written because we must leave 1 byte for END.
+        assert!(
+            written < needed,
+            "serialize_all wrote {} into a buffer of {}, leaving no room for END",
+            written,
+            needed
+        );
+    }
 }
 
 /// Compute the broadcast address for a network
