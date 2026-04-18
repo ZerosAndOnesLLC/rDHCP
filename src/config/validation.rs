@@ -308,3 +308,60 @@ fn subnets_overlap(a_addr: IpAddr, a_prefix: u8, b_addr: IpAddr, b_prefix: u8) -
     let b_val = ip_to_u128(&b_addr);
     (a_val >> shift) == (b_val >> shift)
 }
+
+/// Return true if the given address is unsuitable as a DHCP relay agent
+/// source (giaddr). Rejects loopback, link-local, multicast, broadcast,
+/// reserved (class E), and the unspecified address.
+#[allow(dead_code)]
+pub fn is_bogon_giaddr(ip: std::net::Ipv4Addr) -> bool {
+    ip.is_unspecified()
+        || ip.is_loopback()
+        || ip.is_link_local()
+        || ip.is_multicast()
+        || ip.is_broadcast()
+        // Class E reserved (240.0.0.0/4) — is_reserved is unstable, so check manually.
+        || (ip.octets()[0] & 0xF0) == 0xF0
+}
+
+#[cfg(test)]
+mod giaddr_tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn loopback_is_bogon() {
+        assert!(is_bogon_giaddr(Ipv4Addr::new(127, 0, 0, 1)));
+    }
+
+    #[test]
+    fn link_local_is_bogon() {
+        assert!(is_bogon_giaddr(Ipv4Addr::new(169, 254, 1, 1)));
+    }
+
+    #[test]
+    fn multicast_is_bogon() {
+        assert!(is_bogon_giaddr(Ipv4Addr::new(224, 0, 0, 1)));
+    }
+
+    #[test]
+    fn broadcast_is_bogon() {
+        assert!(is_bogon_giaddr(Ipv4Addr::BROADCAST));
+    }
+
+    #[test]
+    fn reserved_class_e_is_bogon() {
+        assert!(is_bogon_giaddr(Ipv4Addr::new(240, 0, 0, 1)));
+    }
+
+    #[test]
+    fn unspecified_is_bogon() {
+        assert!(is_bogon_giaddr(Ipv4Addr::UNSPECIFIED));
+    }
+
+    #[test]
+    fn normal_unicast_is_not_bogon() {
+        assert!(!is_bogon_giaddr(Ipv4Addr::new(10, 0, 0, 1)));
+        assert!(!is_bogon_giaddr(Ipv4Addr::new(192, 168, 1, 1)));
+        assert!(!is_bogon_giaddr(Ipv4Addr::new(172, 29, 69, 5)));
+    }
+}
