@@ -5,6 +5,33 @@ All notable changes to rDHCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.5] - 2026-04-17
+
+### Added
+- **DHCPv4 relay agent support on FreeBSD** — a second per-worker receive
+  socket on `0.0.0.0:67` is now opened alongside the existing broadcast
+  socket so requests forwarded from a DHCP relay (`giaddr != 0`) are
+  received and processed. Previously FreeBSD silently dropped these.
+  (Fixes #57.)
+- `[global] accept_relayed = true|false` — global kill-switch for relayed
+  DHCP (default: `true`).
+- `[[subnet]] trusted_relays = ["<ip>", ...]` — per-subnet whitelist of
+  relay agent source IPs (default: empty = accept any relay).
+- Prometheus metrics: `rdhcpd_dhcpv4_relayed_received_total` and
+  `rdhcpd_dhcpv4_relayed_dropped_total{reason="..."}` with reasons
+  `accept_relayed_disabled`, `bad_giaddr`, `untrusted_relay`, `rate_limit`.
+
+### Security
+- `giaddr` is validated against a bogon list (loopback, link-local,
+  multicast, broadcast, class E, unspecified) before further processing.
+- A per-relay-source rate limiter is applied to relayed traffic in
+  addition to the existing per-MAC limiter.
+
+### Changed (post-merge polish)
+- Dedicated `relay_rate_limit_burst` / `relay_rate_limit_pps` (defaults 200 / 100.0) — the previous behavior reused per-MAC defaults which were too restrictive for a relay.
+- Bad-giaddr and untrusted-relay drops now log at `debug!` (they fire before the per-relay rate limiter — counters remain authoritative).
+- Malformed `trusted_relays` entries are now logged as warnings at startup instead of being silently dropped.
+
 ## [0.8.0] - 2026-03-29
 
 ### Added

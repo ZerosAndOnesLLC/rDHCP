@@ -11,6 +11,7 @@ use super::packet::{DhcpV4Packet, MAX_PACKET_SIZE};
 use crate::allocator::SubnetAllocator;
 use crate::config::validation::{ip_in_subnet, parse_cidr, parse_mac};
 use crate::config::{Config, SubnetConfig};
+use crate::dhcpv4::stats::DhcpV4Stats;
 use crate::ha::HaBackend;
 use crate::lease::store::LeaseStore;
 use crate::lease::types::{Lease, LeaseState};
@@ -38,6 +39,30 @@ pub enum DhcpSender {
 /// Duration to hold an Offer before it expires (seconds)
 const OFFER_HOLD_TIME: u64 = 30;
 
+/// Outcome of the relay-security classification.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RelayDecision {
+    /// Packet is not relayed — skip relay checks.
+    NotRelayed,
+    /// Relayed and accepted.
+    Accept,
+    /// Dropped because `accept_relayed = false`.
+    DroppedDisabled,
+    /// Dropped because giaddr is a bogon or does not match a subnet.
+    DroppedBadGiaddr,
+    /// Dropped because the UDP source IP is not in the subnet's trusted_relays.
+    DroppedUntrustedRelay,
+    /// Dropped by the per-relay-source rate limiter.
+    DroppedRateLimit,
+}
+
+/// Returns true if `source` is an acceptable relay agent for `subnet`.
+/// Empty trusted_relays = accept any source (backwards-compatible default).
+fn relay_source_is_trusted(subnet: &SubnetInfo, source: Ipv4Addr) -> bool {
+    subnet.trusted_relays.is_empty()
+        || subnet.trusted_relays.iter().any(|ip| *ip == source)
+}
+
 /// Minimum lease time we'll grant (prevents rapid-churn DoS)
 const MIN_LEASE_TIME: u32 = 60;
 
@@ -60,8 +85,14 @@ pub struct DhcpV4Server<H: HaBackend> {
     global_rate_limiter: Option<Arc<GlobalRateLimiter>>,
     /// Rogue client detector
     rogue_detector: Arc<RogueDetector>,
+    /// Per-relay-source rate limiter (keyed by UDP source IP bytes).
+    relay_rate_limiter: Arc<RateLimiter>,
+    /// Observability counters for relay handling.
+    stats: Arc<DhcpV4Stats>,
     /// Pool utilization high-water mark for alerting
     pool_high_water: f64,
+    /// Snapshot of `config.global.accept_relayed` for cheap reads.
+    config_accept_relayed: bool,
 }
 
 /// Pre-parsed subnet information for runtime lookups.
@@ -74,6 +105,28 @@ struct SubnetInfo {
     config: Arc<SubnetConfig>,
     /// Per-subnet MAC ACL
     mac_acl: Arc<MacAcl>,
+    /// Pre-parsed trusted relay agent source IPs. Empty = accept any relay.
+    trusted_relays: Arc<[Ipv4Addr]>,
+}
+
+impl SubnetInfo {
+    /// Parse the raw trusted_relays strings from a SubnetConfig into Ipv4Addr.
+    /// Invalid entries emit a warning and are dropped (never panics).
+    fn parse_trusted_relays(cfg: &SubnetConfig) -> Vec<Ipv4Addr> {
+        let mut out = Vec::with_capacity(cfg.trusted_relays.len());
+        for s in &cfg.trusted_relays {
+            match s.parse::<Ipv4Addr>() {
+                Ok(ip) => out.push(ip),
+                Err(e) => warn!(
+                    subnet = %cfg.network,
+                    entry = %s,
+                    error = %e,
+                    "ignoring malformed trusted_relays entry"
+                ),
+            }
+        }
+        out
+    }
 }
 
 impl<H: HaBackend> DhcpV4Server<H> {
@@ -88,6 +141,8 @@ impl<H: HaBackend> DhcpV4Server<H> {
         rate_limiter: Arc<RateLimiter>,
         global_rate_limiter: Option<Arc<GlobalRateLimiter>>,
         rogue_detector: Arc<RogueDetector>,
+        relay_rate_limiter: Arc<RateLimiter>,
+        stats: Arc<DhcpV4Stats>,
     ) -> Self {
         let subnets: Vec<SubnetInfo> = config
             .subnet
@@ -117,6 +172,7 @@ impl<H: HaBackend> DhcpV4Server<H> {
                         prefix_len,
                         config: Arc::new(s.clone()),
                         mac_acl,
+                        trusted_relays: Arc::from(SubnetInfo::parse_trusted_relays(s)),
                     })
                 } else {
                     None
@@ -125,6 +181,7 @@ impl<H: HaBackend> DhcpV4Server<H> {
             .collect();
 
         let pool_high_water = config.global.pool_high_water;
+        let config_accept_relayed = config.global.accept_relayed;
 
         Self {
             lease_store,
@@ -136,8 +193,59 @@ impl<H: HaBackend> DhcpV4Server<H> {
             rate_limiter,
             global_rate_limiter,
             rogue_detector,
+            relay_rate_limiter,
+            stats,
             pool_high_water,
+            config_accept_relayed,
         }
+    }
+
+    /// Classify a received DHCPv4 packet against the relay security gates.
+    /// Increments the appropriate `stats` counter as a side-effect.
+    pub fn classify_relayed(
+        &self,
+        packet: &DhcpV4Packet,
+        src_addr: SocketAddr,
+    ) -> RelayDecision {
+        if !packet.is_relayed() {
+            return RelayDecision::NotRelayed;
+        }
+        use std::sync::atomic::Ordering;
+        self.stats.relayed_received.fetch_add(1, Ordering::Relaxed);
+
+        if !self.config_accept_relayed {
+            self.stats.relayed_dropped_disabled.fetch_add(1, Ordering::Relaxed);
+            return RelayDecision::DroppedDisabled;
+        }
+        if crate::config::validation::is_bogon_giaddr(packet.giaddr) {
+            self.stats.relayed_dropped_bad_giaddr.fetch_add(1, Ordering::Relaxed);
+            return RelayDecision::DroppedBadGiaddr;
+        }
+        let relay_subnet = match self.subnets.iter().find(|s| {
+            ip_in_subnet(&IpAddr::V4(packet.giaddr), &IpAddr::V4(s.network_addr), s.prefix_len)
+        }) {
+            Some(s) => s,
+            None => {
+                self.stats.relayed_dropped_bad_giaddr.fetch_add(1, Ordering::Relaxed);
+                return RelayDecision::DroppedBadGiaddr;
+            }
+        };
+        let source_ip = match src_addr.ip() {
+            IpAddr::V4(v4) => v4,
+            _ => {
+                self.stats.relayed_dropped_untrusted_relay.fetch_add(1, Ordering::Relaxed);
+                return RelayDecision::DroppedUntrustedRelay;
+            }
+        };
+        if !relay_source_is_trusted(relay_subnet, source_ip) {
+            self.stats.relayed_dropped_untrusted_relay.fetch_add(1, Ordering::Relaxed);
+            return RelayDecision::DroppedUntrustedRelay;
+        }
+        if !self.relay_rate_limiter.check(&source_ip.octets()) {
+            self.stats.relayed_dropped_rate_limit.fetch_add(1, Ordering::Relaxed);
+            return RelayDecision::DroppedRateLimit;
+        }
+        RelayDecision::Accept
     }
 
     /// Run the DHCPv4 server loop.
@@ -183,6 +291,27 @@ impl<H: HaBackend> DhcpV4Server<H> {
                     "dropping packet with excessive hop count"
                 );
                 continue;
+            }
+
+            // Relay security gates (issue #57) — see classify_relayed.
+            match self.classify_relayed(&packet, src_addr) {
+                RelayDecision::NotRelayed | RelayDecision::Accept => {}
+                RelayDecision::DroppedDisabled => {
+                    debug!(src = %src_addr, giaddr = %packet.giaddr, "dropping relayed packet: accept_relayed=false");
+                    continue;
+                }
+                RelayDecision::DroppedBadGiaddr => {
+                    debug!(src = %src_addr, giaddr = %packet.giaddr, "dropping relayed packet: bogon or unknown-subnet giaddr");
+                    continue;
+                }
+                RelayDecision::DroppedUntrustedRelay => {
+                    debug!(src = %src_addr, giaddr = %packet.giaddr, "dropping relayed packet: source IP not in trusted_relays");
+                    continue;
+                }
+                RelayDecision::DroppedRateLimit => {
+                    debug!(src = %src_addr, "dropping relayed packet: per-relay rate limit");
+                    continue;
+                }
             }
 
             let msg_type = match packet.message_type() {
@@ -878,7 +1007,9 @@ impl<H: HaBackend> DhcpV4Server<H> {
         )
     }
 
-    /// Check if giaddr matches any known subnet (true relay vs perfdhcp loopback)
+    /// Defense-in-depth: re-checks the giaddr-in-subnet predicate that
+    /// `classify_relayed` already enforced for relayed packets. Kept because
+    /// `reply_destination` is called for non-relayed paths too.
     fn is_known_relay(&self, giaddr: Ipv4Addr) -> bool {
         self.subnets.iter().any(|s| {
             ip_in_subnet(
@@ -997,5 +1128,123 @@ fn hex_nibble(c: u8) -> Option<u8> {
         b'a'..=b'f' => Some(c - b'a' + 10),
         b'A'..=b'F' => Some(c - b'A' + 10),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod relay_gate_tests {
+    use super::*;
+    use crate::config::SubnetConfig;
+    use crate::ratelimit::MacAcl;
+
+    fn make_subnet_info(network_str: &str, prefix: u8, trusted: Vec<Ipv4Addr>) -> SubnetInfo {
+        let cfg = SubnetConfig {
+            network: format!("{}/{}", network_str, prefix),
+            pool_start: None,
+            pool_end: None,
+            lease_time: 3600,
+            max_lease_time: None,
+            renewal_time: None,
+            rebinding_time: None,
+            preferred_time: None,
+            subnet_type: "address".to_string(),
+            delegated_length: None,
+            router: None,
+            dns: vec![],
+            domain: None,
+            ip_probe: false,
+            ip_probe_timeout_ms: None,
+            max_leases_per_mac: 1,
+            mac_allow: vec![],
+            mac_deny: vec![],
+            trusted_relays: trusted.iter().map(|ip| ip.to_string()).collect(),
+            reservation: vec![],
+        };
+        SubnetInfo {
+            network: Arc::from(cfg.network.as_str()),
+            network_addr: network_str.parse().unwrap(),
+            prefix_len: prefix,
+            config: Arc::new(cfg),
+            mac_acl: Arc::new(MacAcl::new(vec![], vec![])),
+            trusted_relays: Arc::from(trusted.as_slice()),
+        }
+    }
+
+    #[test]
+    fn empty_trusted_relays_allows_any_source() {
+        let subnet = make_subnet_info("10.0.0.0", 24, vec![]);
+        assert!(relay_source_is_trusted(&subnet, Ipv4Addr::new(10, 0, 0, 5)));
+        assert!(relay_source_is_trusted(&subnet, Ipv4Addr::new(192, 168, 1, 1)));
+    }
+
+    #[test]
+    fn populated_trusted_relays_enforces_match() {
+        let trusted = vec![Ipv4Addr::new(10, 0, 0, 5), Ipv4Addr::new(10, 0, 0, 6)];
+        let subnet = make_subnet_info("10.0.0.0", 24, trusted);
+        assert!(relay_source_is_trusted(&subnet, Ipv4Addr::new(10, 0, 0, 5)));
+        assert!(relay_source_is_trusted(&subnet, Ipv4Addr::new(10, 0, 0, 6)));
+        assert!(!relay_source_is_trusted(&subnet, Ipv4Addr::new(10, 0, 0, 7)));
+    }
+}
+
+#[cfg(test)]
+mod subnet_info_tests {
+    use super::*;
+    use crate::config::SubnetConfig;
+
+    fn make_subnet(network: &str, trusted: Vec<String>) -> SubnetConfig {
+        SubnetConfig {
+            network: network.to_string(),
+            pool_start: None,
+            pool_end: None,
+            lease_time: 3600,
+            max_lease_time: None,
+            renewal_time: None,
+            rebinding_time: None,
+            preferred_time: None,
+            subnet_type: "address".to_string(),
+            delegated_length: None,
+            router: None,
+            dns: vec![],
+            domain: None,
+            ip_probe: false,
+            ip_probe_timeout_ms: None,
+            max_leases_per_mac: 1,
+            mac_allow: vec![],
+            mac_deny: vec![],
+            trusted_relays: trusted,
+            reservation: vec![],
+        }
+    }
+
+    #[test]
+    fn trusted_relays_are_parsed_into_subnet_info() {
+        let cfg = make_subnet(
+            "10.0.0.0/24",
+            vec!["10.0.0.5".to_string(), "invalid".to_string(), "10.0.0.6".to_string()],
+        );
+        let parsed = SubnetInfo::parse_trusted_relays(&cfg);
+        assert_eq!(parsed, vec![Ipv4Addr::new(10, 0, 0, 5), Ipv4Addr::new(10, 0, 0, 6)]);
+    }
+
+    #[test]
+    fn empty_trusted_relays_parses_to_empty_vec() {
+        let cfg = make_subnet("10.0.0.0/24", vec![]);
+        let parsed = SubnetInfo::parse_trusted_relays(&cfg);
+        assert!(parsed.is_empty());
+    }
+
+    #[test]
+    fn malformed_trusted_relays_are_dropped_not_panic() {
+        let cfg = make_subnet(
+            "10.0.0.0/24",
+            vec![
+                "not-an-ip".to_string(),
+                "10.0.0.500".to_string(),
+                "256.1.2.3".to_string(),
+            ],
+        );
+        let parsed = SubnetInfo::parse_trusted_relays(&cfg);
+        assert!(parsed.is_empty());
     }
 }

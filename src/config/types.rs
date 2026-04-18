@@ -51,6 +51,19 @@ pub struct GlobalConfig {
     /// Pool utilization high-water mark (0.0-1.0) for alerting.
     #[serde(default = "default_pool_high_water")]
     pub pool_high_water: f64,
+    /// Whether to accept DHCP packets with giaddr != 0 (i.e. forwarded by a
+    /// DHCP relay agent). When false, all relayed packets are dropped early
+    /// regardless of per-subnet trusted_relays configuration.
+    #[serde(default = "default_accept_relayed")]
+    pub accept_relayed: bool,
+    /// Per-relay-agent-source rate limit: maximum burst size (packets).
+    /// Higher than the per-MAC default because a single relay aggregates
+    /// many clients. Applied only to packets with `giaddr != 0`.
+    #[serde(default = "default_relay_rate_limit_burst")]
+    pub relay_rate_limit_burst: u32,
+    /// Per-relay-agent-source rate limit: sustained packets per second.
+    #[serde(default = "default_relay_rate_limit_pps")]
+    pub relay_rate_limit_pps: f64,
 }
 
 /// REST API server configuration.
@@ -170,6 +183,11 @@ pub struct SubnetConfig {
     /// MAC deny list (these MACs are always rejected).
     #[serde(default)]
     pub mac_deny: Vec<String>,
+    /// Trusted DHCP relay agent source IPs for this subnet. When non-empty,
+    /// relayed packets whose UDP source IP is not on this list are dropped.
+    /// When empty, all relays are accepted (backwards-compatible default).
+    #[serde(default)]
+    pub trusted_relays: Vec<String>,
 
     // Reservations
     /// Static address reservations for specific clients.
@@ -338,4 +356,99 @@ fn default_pool_high_water() -> f64 {
 
 fn default_max_leases_per_mac() -> u32 {
     1
+}
+
+fn default_accept_relayed() -> bool {
+    true
+}
+
+fn default_relay_rate_limit_burst() -> u32 {
+    200
+}
+
+fn default_relay_rate_limit_pps() -> f64 {
+    100.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn global_accept_relayed_defaults_to_true() {
+        let toml = r#"
+[global]
+lease_db = "/tmp/x"
+
+[ha]
+mode = "standalone"
+"#;
+        let c: Config = toml::from_str(toml).unwrap();
+        assert!(c.global.accept_relayed);
+    }
+
+    #[test]
+    fn global_accept_relayed_can_be_disabled() {
+        let toml = r#"
+[global]
+lease_db = "/tmp/x"
+accept_relayed = false
+
+[ha]
+mode = "standalone"
+"#;
+        let c: Config = toml::from_str(toml).unwrap();
+        assert!(!c.global.accept_relayed);
+    }
+
+    #[test]
+    fn relay_rate_limit_defaults_applied_when_omitted() {
+        let toml = r#"
+[global]
+lease_db = "/tmp/x"
+
+[ha]
+mode = "standalone"
+"#;
+        let c: Config = toml::from_str(toml).unwrap();
+        assert_eq!(c.global.relay_rate_limit_burst, 200);
+        assert!((c.global.relay_rate_limit_pps - 100.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn relay_rate_limit_explicit_values_parse() {
+        let toml = r#"
+[global]
+lease_db = "/tmp/x"
+relay_rate_limit_burst = 500
+relay_rate_limit_pps = 250.0
+
+[ha]
+mode = "standalone"
+"#;
+        let c: Config = toml::from_str(toml).unwrap();
+        assert_eq!(c.global.relay_rate_limit_burst, 500);
+        assert!((c.global.relay_rate_limit_pps - 250.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn subnet_trusted_relays_defaults_empty_and_can_be_set() {
+        let toml = r#"
+[global]
+lease_db = "/tmp/x"
+
+[ha]
+mode = "standalone"
+
+[[subnet]]
+network = "10.0.0.0/24"
+
+[[subnet]]
+network = "10.0.1.0/24"
+trusted_relays = ["10.0.1.5", "10.0.1.6"]
+"#;
+        let c: Config = toml::from_str(toml).unwrap();
+        assert!(c.subnet[0].trusted_relays.is_empty());
+        assert_eq!(c.subnet[1].trusted_relays, vec!["10.0.1.5", "10.0.1.6"]);
+    }
 }
