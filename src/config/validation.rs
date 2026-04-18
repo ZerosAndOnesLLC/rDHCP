@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 
 use tracing::warn;
 
@@ -313,7 +313,7 @@ fn subnets_overlap(a_addr: IpAddr, a_prefix: u8, b_addr: IpAddr, b_prefix: u8) -
 /// source (giaddr). Rejects loopback, link-local, multicast, broadcast,
 /// reserved (class E), and the unspecified address.
 #[allow(dead_code)]
-pub fn is_bogon_giaddr(ip: std::net::Ipv4Addr) -> bool {
+pub fn is_bogon_giaddr(ip: Ipv4Addr) -> bool {
     ip.is_unspecified()
         || ip.is_loopback()
         || ip.is_link_local()
