@@ -33,6 +33,8 @@ pub struct ApiState<H: HaBackend> {
     pub wal: Arc<Wal>,
     /// Optional API key for authenticating management requests
     pub api_key: Option<String>,
+    /// DHCPv4 relay observability counters
+    pub dhcpv4_stats: Arc<crate::dhcpv4::stats::DhcpV4Stats>,
 }
 
 /// Authentication middleware — checks X-API-Key header against configured key.

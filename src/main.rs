@@ -131,6 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ha: ha.clone(),
             wal: wal.clone(),
             api_key: api_config.api_key.as_deref().map(|s| s.to_string()),
+            dhcpv4_stats: dhcpv4_stats.clone(),
         });
 
         let listen = api_config.listen.clone();

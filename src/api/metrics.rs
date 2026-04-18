@@ -102,5 +102,62 @@ pub async fn metrics_handler<H: HaBackend>(
         if ha_status.healthy { 1 } else { 0 }
     ));
 
+    // DHCPv4 relay counters
+    use std::sync::atomic::Ordering;
+    let s = &state.dhcpv4_stats;
+
+    output.push_str("# HELP rdhcpd_dhcpv4_relayed_received_total DHCPv4 packets received with giaddr != 0\n");
+    output.push_str("# TYPE rdhcpd_dhcpv4_relayed_received_total counter\n");
+    output.push_str(&format!(
+        "rdhcpd_dhcpv4_relayed_received_total {}\n",
+        s.relayed_received.load(Ordering::Relaxed)
+    ));
+
+    output.push_str("# HELP rdhcpd_dhcpv4_relayed_dropped_total DHCPv4 relayed packets dropped, by reason\n");
+    output.push_str("# TYPE rdhcpd_dhcpv4_relayed_dropped_total counter\n");
+    output.push_str(&format!(
+        "rdhcpd_dhcpv4_relayed_dropped_total{{reason=\"accept_relayed_disabled\"}} {}\n",
+        s.relayed_dropped_disabled.load(Ordering::Relaxed)
+    ));
+    output.push_str(&format!(
+        "rdhcpd_dhcpv4_relayed_dropped_total{{reason=\"bad_giaddr\"}} {}\n",
+        s.relayed_dropped_bad_giaddr.load(Ordering::Relaxed)
+    ));
+    output.push_str(&format!(
+        "rdhcpd_dhcpv4_relayed_dropped_total{{reason=\"untrusted_relay\"}} {}\n",
+        s.relayed_dropped_untrusted_relay.load(Ordering::Relaxed)
+    ));
+    output.push_str(&format!(
+        "rdhcpd_dhcpv4_relayed_dropped_total{{reason=\"rate_limit\"}} {}\n",
+        s.relayed_dropped_rate_limit.load(Ordering::Relaxed)
+    ));
+
     ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], output)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::dhcpv4::stats::DhcpV4Stats;
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn metrics_strings_are_emitted_for_relay_counters() {
+        let s = Arc::new(DhcpV4Stats::new());
+        s.relayed_received.fetch_add(7, Ordering::Relaxed);
+        s.relayed_dropped_untrusted_relay.fetch_add(2, Ordering::Relaxed);
+
+        let mut output = String::new();
+        output.push_str(&format!(
+            "rdhcpd_dhcpv4_relayed_received_total {}\n",
+            s.relayed_received.load(Ordering::Relaxed)
+        ));
+        output.push_str(&format!(
+            "rdhcpd_dhcpv4_relayed_dropped_total{{reason=\"untrusted_relay\"}} {}\n",
+            s.relayed_dropped_untrusted_relay.load(Ordering::Relaxed)
+        ));
+
+        assert!(output.contains("rdhcpd_dhcpv4_relayed_received_total 7"));
+        assert!(output.contains("rdhcpd_dhcpv4_relayed_dropped_total{reason=\"untrusted_relay\"} 2"));
+    }
 }
