@@ -1,6 +1,6 @@
 //! Atomic counters for DHCPv4 relay observability.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 
 /// Prometheus-exposed counters for DHCPv4 relay handling.
 #[derive(Default)]
@@ -25,31 +25,27 @@ impl DhcpV4Stats {
         Self::default()
     }
 
-    /// Read the current value of a counter (Relaxed ordering — metrics are
-    /// observational and do not need happens-before with other state).
-    pub fn load(counter: &AtomicU64) -> u64 {
-        counter.load(Ordering::Relaxed)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn counters_start_at_zero() {
         let s = DhcpV4Stats::new();
-        assert_eq!(DhcpV4Stats::load(&s.relayed_received), 0);
-        assert_eq!(DhcpV4Stats::load(&s.relayed_dropped_disabled), 0);
-        assert_eq!(DhcpV4Stats::load(&s.relayed_dropped_bad_giaddr), 0);
-        assert_eq!(DhcpV4Stats::load(&s.relayed_dropped_untrusted_relay), 0);
-        assert_eq!(DhcpV4Stats::load(&s.relayed_dropped_rate_limit), 0);
+        assert_eq!(s.relayed_received.load(Ordering::Relaxed), 0);
+        assert_eq!(s.relayed_dropped_disabled.load(Ordering::Relaxed), 0);
+        assert_eq!(s.relayed_dropped_bad_giaddr.load(Ordering::Relaxed), 0);
+        assert_eq!(s.relayed_dropped_untrusted_relay.load(Ordering::Relaxed), 0);
+        assert_eq!(s.relayed_dropped_rate_limit.load(Ordering::Relaxed), 0);
     }
 
     #[test]
     fn counters_increment() {
         let s = DhcpV4Stats::new();
         s.relayed_received.fetch_add(3, Ordering::Relaxed);
-        assert_eq!(DhcpV4Stats::load(&s.relayed_received), 3);
+        assert_eq!(s.relayed_received.load(Ordering::Relaxed), 3);
     }
 }
