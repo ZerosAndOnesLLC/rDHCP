@@ -73,6 +73,9 @@ pub fn serialize_option_override(o: &OptionOverride) -> Result<Vec<u8>, String> 
                 .map_err(|_| format!("ips entry '{}' is not a valid IPv4 address", s))?;
             bytes.extend_from_slice(&addr.octets());
         }
+        if bytes.is_empty() {
+            return Err(format!("option code {}: value cannot be empty", o.code));
+        }
         return Ok(bytes);
     }
 
@@ -85,6 +88,9 @@ pub fn serialize_option_override(o: &OptionOverride) -> Result<Vec<u8>, String> 
         }
         if !s.bytes().all(|b| b.is_ascii_graphic() || b == b' ') {
             return Err("string value must contain only printable ASCII characters".to_string());
+        }
+        if s.is_empty() {
+            return Err(format!("option code {}: value cannot be empty", o.code));
         }
         return Ok(s.as_bytes().to_vec());
     }
@@ -103,6 +109,9 @@ pub fn serialize_option_override(o: &OptionOverride) -> Result<Vec<u8>, String> 
 
     if let Some(ref s) = o.hex {
         let bytes = decode_hex(s)?;
+        if bytes.is_empty() {
+            return Err(format!("option code {}: value cannot be empty", o.code));
+        }
         if bytes.len() > 255 {
             return Err(format!(
                 "hex value is {} bytes, maximum is 255",
@@ -636,6 +645,33 @@ mod option_override_tests {
         };
         assert!(serialize_option_override(&o).is_err());
     }
+
+    #[test]
+    fn empty_hex_is_rejected() {
+        let o = OptionOverride {
+            hex: Some("".to_string()),
+            ..base()
+        };
+        assert!(serialize_option_override(&o).is_err());
+    }
+
+    #[test]
+    fn empty_ips_is_rejected() {
+        let o = OptionOverride {
+            ips: Some(vec![]),
+            ..base()
+        };
+        assert!(serialize_option_override(&o).is_err());
+    }
+
+    #[test]
+    fn empty_string_is_rejected() {
+        let o = OptionOverride {
+            string: Some("".to_string()),
+            ..base()
+        };
+        assert!(serialize_option_override(&o).is_err());
+    }
 }
 
 #[cfg(test)]
@@ -741,5 +777,77 @@ ips = ["10.0.0.2"]
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("ntp"), "expected 'ntp' in: {}", msg);
+    }
+
+    #[test]
+    fn option_code_3_conflicts_with_typed_router() {
+        let result = validate_toml(
+            r#"
+[global]
+lease_db = "/tmp/x"
+
+[ha]
+mode = "standalone"
+
+[[subnet]]
+network = "10.0.0.0/24"
+router = "10.0.0.1"
+
+[[subnet.option]]
+code = 3
+ip = "10.0.0.2"
+"#,
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("router"), "expected 'router' in: {}", msg);
+    }
+
+    #[test]
+    fn option_code_6_conflicts_with_typed_dns() {
+        let result = validate_toml(
+            r#"
+[global]
+lease_db = "/tmp/x"
+
+[ha]
+mode = "standalone"
+
+[[subnet]]
+network = "10.0.0.0/24"
+dns = ["10.0.0.1"]
+
+[[subnet.option]]
+code = 6
+ips = ["10.0.0.2"]
+"#,
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("dns"), "expected 'dns' in: {}", msg);
+    }
+
+    #[test]
+    fn option_code_15_conflicts_with_typed_domain() {
+        let result = validate_toml(
+            r#"
+[global]
+lease_db = "/tmp/x"
+
+[ha]
+mode = "standalone"
+
+[[subnet]]
+network = "10.0.0.0/24"
+domain = "example.com"
+
+[[subnet.option]]
+code = 15
+string = "other.example"
+"#,
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("domain"), "expected 'domain' in: {}", msg);
     }
 }

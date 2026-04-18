@@ -557,7 +557,7 @@ mod tests {
         assert_eq!(&buf[..len], &[42, 8, 10, 0, 0, 1, 10, 0, 0, 2]);
         let parsed = DhcpOption::parse_all(&buf[..len]).unwrap();
         assert_eq!(parsed.len(), 1);
-        matches!(parsed[0], DhcpOption::NtpServers(_));
+        assert!(matches!(parsed[0], DhcpOption::NtpServers(_)));
     }
 
     #[test]
