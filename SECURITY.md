@@ -29,6 +29,20 @@ rDHCP is a network infrastructure service that typically runs as root. Key secur
 - DHCP operates on privileged ports (67, 547) requiring root or `CAP_NET_BIND_SERVICE`
 - HA peer communication uses mutual TLS (mTLS) with certificate verification
 - The management API should be bound to localhost or a management network, not public interfaces
+- DHCP relay agent forwarding (`giaddr != 0`) is accepted by default. On
+  FreeBSD the server listens on both `255.255.255.255:67` (directly-connected
+  broadcasts) and `0.0.0.0:67` (relayed unicast) so relayed requests are
+  received. To disable relay acceptance entirely set `accept_relayed = false`
+  in `[global]`. To restrict which relay agents may forward to a subnet, set
+  `trusted_relays = ["<relay-ip>", ...]` on each `[[subnet]]` — packets from
+  any other source are dropped silently and counted under
+  `rdhcpd_dhcpv4_relayed_dropped_total{reason="untrusted_relay"}`.
+- Relay input is additionally validated: `giaddr` must not be a bogon
+  (loopback/link-local/multicast/broadcast/reserved) and must fall within a
+  configured subnet, otherwise the packet is dropped. Option 82 (relay agent
+  information) is **not** used for client identity.
+- A separate rate limiter is applied per UDP source IP on relayed traffic so
+  a single misbehaving relay cannot exhaust the global per-MAC budget.
 
 ### Input Validation
 - All DHCP packet fields are bounds-checked before access
