@@ -317,12 +317,15 @@ impl DhcpOption {
 
     /// Serialize all options into a buffer. Returns bytes written.
     /// Stops writing if the buffer is too small for the next option.
+    /// Uses `>=` (not `>`) so that at least 1 byte is always left for the
+    /// END terminator (0xFF) written by the caller after this returns.
     pub fn serialize_all(options: &[DhcpOption], buf: &mut [u8]) -> usize {
         let mut pos = 0;
 
         for opt in options {
             let needed = opt.serialized_len();
-            if pos + needed > buf.len() {
+            // Reserve 1 byte for the END terminator written by the caller.
+            if pos + needed >= buf.len() {
                 tracing::warn!(
                     option_code = opt.code(),
                     remaining_bytes = buf.len() - pos,
@@ -564,6 +567,24 @@ mod tests {
     fn ntp_servers_code_is_42() {
         let opt = DhcpOption::NtpServers(vec![Ipv4Addr::new(1, 2, 3, 4)]);
         assert_eq!(opt.code(), 42);
+    }
+
+    #[test]
+    fn serialize_all_reserves_room_for_end_terminator() {
+        // Craft an option whose serialized length would exactly fill the buffer.
+        // The check must reserve at least 1 byte so the caller's END-terminator
+        // write doesn't panic.
+        let opt = DhcpOption::Unknown(99, vec![0u8; 100]);
+        let needed = 2 + 100; // 102
+        let mut buf = vec![0u8; needed]; // exactly needed bytes — no room for END
+        let written = DhcpOption::serialize_all(&[opt], &mut buf);
+        // The option MUST NOT be written because we must leave 1 byte for END.
+        assert!(
+            written < needed,
+            "serialize_all wrote {} into a buffer of {}, leaving no room for END",
+            written,
+            needed
+        );
     }
 }
 

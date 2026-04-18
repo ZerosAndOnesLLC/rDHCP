@@ -222,8 +222,11 @@ fn validate_subnets(config: &Config) -> Result<(), ConfigError> {
         // Validate generic DHCP option overrides
         let mut seen_codes = std::collections::HashSet::new();
         for (k, opt) in subnet.option.iter().enumerate() {
-            // Reserved codes the server controls
-            const RESERVED: &[u8] = &[0, 1, 28, 51, 53, 54, 58, 59, 255];
+            // Reserved codes the server controls, or codes that are
+            // client→server / relay→server only and must not be emitted
+            // by the server (50=RequestedIP, 55=ParameterRequestList,
+            // 57=MaxMessageSize, 82=RelayAgentInfo).
+            const RESERVED: &[u8] = &[0, 1, 28, 50, 51, 53, 54, 55, 57, 58, 59, 82, 255];
             if RESERVED.contains(&opt.code) {
                 return Err(ConfigError::Validation(format!(
                     "subnet[{}] option[{}]: code {} is reserved and managed by the server",
@@ -721,6 +724,32 @@ network = "10.0.0.0/24"
 [[subnet.option]]
 code = 53
 u8 = 1
+"#,
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("reserved"), "expected 'reserved' in: {}", msg);
+    }
+
+    #[test]
+    fn client_only_codes_are_rejected() {
+        // Code 50 (Requested IP) is client→server only; the server must not
+        // emit it.  Verify that all four newly-added reserved codes are blocked
+        // by testing code 50 as a representative.
+        let result = validate_toml(
+            r#"
+[global]
+lease_db = "/tmp/x"
+
+[ha]
+mode = "standalone"
+
+[[subnet]]
+network = "10.0.0.0/24"
+
+[[subnet.option]]
+code = 50
+ip = "10.0.0.5"
 "#,
         );
         assert!(result.is_err());
