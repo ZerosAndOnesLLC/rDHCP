@@ -5,7 +5,7 @@ All notable changes to rDHCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.12.0] - 2026-04-17
+## [0.12.5] - 2026-04-17
 
 ### Added
 - **DHCPv4 relay agent support on FreeBSD** — a second per-worker receive
@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   multicast, broadcast, class E, unspecified) before further processing.
 - A per-relay-source rate limiter is applied to relayed traffic in
   addition to the existing per-MAC limiter.
+
+### Changed (post-merge polish)
+- Dedicated `relay_rate_limit_burst` / `relay_rate_limit_pps` (defaults 200 / 100.0) — the previous behavior reused per-MAC defaults which were too restrictive for a relay.
+- Bad-giaddr and untrusted-relay drops now log at `debug!` (they fire before the per-relay rate limiter — counters remain authoritative).
+- Malformed `trusted_relays` entries are now logged as warnings at startup instead of being silently dropped.
 
 ## [0.8.0] - 2026-03-29
 

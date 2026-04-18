@@ -1007,7 +1007,9 @@ impl<H: HaBackend> DhcpV4Server<H> {
         )
     }
 
-    /// Check if giaddr matches any known subnet (true relay vs perfdhcp loopback)
+    /// Defense-in-depth: re-checks the giaddr-in-subnet predicate that
+    /// `classify_relayed` already enforced for relayed packets. Kept because
+    /// `reply_destination` is called for non-relayed paths too.
     fn is_known_relay(&self, giaddr: Ipv4Addr) -> bool {
         self.subnets.iter().any(|s| {
             ip_in_subnet(

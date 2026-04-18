@@ -43,12 +43,16 @@ rDHCP is a network infrastructure service that typically runs as root. Key secur
   information) is **not** used for client identity.
 - A separate rate limiter is applied per UDP source IP on relayed traffic so
   a single misbehaving relay cannot exhaust the global per-MAC budget.
+- A misbehaving trusted relay can cycle the per-MAC rate-limiter bucket
+  table (bounded at 100,000 entries) by forwarding packets with many
+  fabricated MACs. The per-relay-source rate limit caps throughput but not
+  uniqueness — restrict `trusted_relays` to known-good relay agents.
 
 ### Input Validation
 - All DHCP packet fields are bounds-checked before access
 - Option lengths are validated against RFC limits (255 bytes for DHCPv4, 65535 for DHCPv6)
 - Magic cookie verification prevents processing non-DHCP traffic
-- Hop count validation (>32 rejected) prevents relay loops
+- Hop count validation prevents relay loops (DHCPv4: >16 rejected per RFC 1542; DHCPv6: >32 rejected per RFC 8415)
 
 ### Denial of Service
 - Per-client rate limiting prevents DHCP starvation attacks
