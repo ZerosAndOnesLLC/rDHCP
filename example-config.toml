@@ -20,6 +20,8 @@ global_rate_limit_pps = 0.0       # global rate limit, 0 = disabled (packets/sec
 rogue_threshold = 50              # requests per window before rogue alert
 rogue_window_secs = 60            # sliding window for rogue detection
 pool_high_water = 0.9             # warn when pool utilization exceeds this (0.0-1.0)
+accept_relayed = true             # accept DHCP packets forwarded by a relay agent
+                                  # (giaddr != 0). Set false to disable relay support entirely.
 
 # -----------------------------------------------------------------------------
 # REST Management API
@@ -78,6 +80,10 @@ ip_probe = false                  # probe IP before offering (duplicate detectio
 # ip_probe_timeout_ms = 500       # probe timeout in ms
 # mac_allow = ["aa:bb:cc:dd:ee:f1", "aa:bb:cc:dd:ee:f2"]  # whitelist (empty = allow all)
 # mac_deny = ["00:11:22:33:44:55"]                          # blacklist (checked first)
+
+# --- DHCP Relay ---
+# trusted_relays = ["10.0.1.2"]    # restrict relayed packets to these source IPs
+                                  # empty = accept from any relay (if accept_relayed=true)
 
 # --- Static Reservations ---
 [[subnet.reservation]]

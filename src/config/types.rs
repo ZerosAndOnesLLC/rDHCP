@@ -51,6 +51,11 @@ pub struct GlobalConfig {
     /// Pool utilization high-water mark (0.0-1.0) for alerting.
     #[serde(default = "default_pool_high_water")]
     pub pool_high_water: f64,
+    /// Whether to accept DHCP packets with giaddr != 0 (i.e. forwarded by a
+    /// DHCP relay agent). When false, all relayed packets are dropped early
+    /// regardless of per-subnet trusted_relays configuration.
+    #[serde(default = "default_accept_relayed")]
+    pub accept_relayed: bool,
 }
 
 /// REST API server configuration.
@@ -170,6 +175,11 @@ pub struct SubnetConfig {
     /// MAC deny list (these MACs are always rejected).
     #[serde(default)]
     pub mac_deny: Vec<String>,
+    /// Trusted DHCP relay agent source IPs for this subnet. When non-empty,
+    /// relayed packets whose UDP source IP is not on this list are dropped.
+    /// When empty, all relays are accepted (backwards-compatible default).
+    #[serde(default)]
+    pub trusted_relays: Vec<String>,
 
     // Reservations
     /// Static address reservations for specific clients.
@@ -338,4 +348,61 @@ fn default_pool_high_water() -> f64 {
 
 fn default_max_leases_per_mac() -> u32 {
     1
+}
+
+fn default_accept_relayed() -> bool {
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn global_accept_relayed_defaults_to_true() {
+        let toml = r#"
+[global]
+lease_db = "/tmp/x"
+
+[ha]
+mode = "standalone"
+"#;
+        let c: Config = toml::from_str(toml).unwrap();
+        assert!(c.global.accept_relayed);
+    }
+
+    #[test]
+    fn global_accept_relayed_can_be_disabled() {
+        let toml = r#"
+[global]
+lease_db = "/tmp/x"
+accept_relayed = false
+
+[ha]
+mode = "standalone"
+"#;
+        let c: Config = toml::from_str(toml).unwrap();
+        assert!(!c.global.accept_relayed);
+    }
+
+    #[test]
+    fn subnet_trusted_relays_defaults_empty_and_can_be_set() {
+        let toml = r#"
+[global]
+lease_db = "/tmp/x"
+
+[ha]
+mode = "standalone"
+
+[[subnet]]
+network = "10.0.0.0/24"
+
+[[subnet]]
+network = "10.0.1.0/24"
+trusted_relays = ["10.0.1.5", "10.0.1.6"]
+"#;
+        let c: Config = toml::from_str(toml).unwrap();
+        assert!(c.subnet[0].trusted_relays.is_empty());
+        assert_eq!(c.subnet[1].trusted_relays, vec!["10.0.1.5", "10.0.1.6"]);
+    }
 }
