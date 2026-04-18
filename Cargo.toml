@@ -1,6 +1,6 @@
 [package]
 name = "rdhcpd"
-version = "0.12.0"
+version = "0.12.1"
 edition = "2024"
 description = "High-performance DHCP server with built-in HA support. Dual-stack (DHCPv4/DHCPv6), active/active and Raft HA, single binary, no external DB."
 license = "MIT"
@@ -10,6 +10,9 @@ readme = "README.md"
 keywords = ["dhcp", "dhcpv6", "networking", "server", "high-availability"]
 categories = ["network-programming", "command-line-utilities"]
 
+[features]
+test-helpers = []
+
 [lib]
 name = "rdhcpd"
 path = "src/lib.rs"
@@ -17,6 +20,10 @@ path = "src/lib.rs"
 [[bin]]
 name = "rdhcpd"
 path = "src/main.rs"
+
+[[test]]
+name = "dhcpv4_relay_gates"
+required-features = ["test-helpers"]
 
 
 [dependencies]

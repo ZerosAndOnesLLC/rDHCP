@@ -345,6 +345,32 @@ impl DhcpV4Packet {
     }
 }
 
+#[cfg(any(test, feature = "test-helpers"))]
+impl DhcpV4Packet {
+    /// Construct a minimal BOOTREQUEST Discover packet for tests.
+    pub fn new_discover(mac: [u8; 6]) -> Self {
+        let mut chaddr = [0u8; 16];
+        chaddr[..6].copy_from_slice(&mac);
+        Self {
+            op: 1, // BOOTREQUEST
+            htype: 1,
+            hlen: 6,
+            hops: 0,
+            xid: 0x12345678,
+            secs: 0,
+            flags: 0,
+            ciaddr: Ipv4Addr::UNSPECIFIED,
+            yiaddr: Ipv4Addr::UNSPECIFIED,
+            siaddr: Ipv4Addr::UNSPECIFIED,
+            giaddr: Ipv4Addr::UNSPECIFIED,
+            chaddr,
+            sname: [0u8; 64],
+            file: [0u8; 128],
+            options: vec![DhcpOption::MessageType(MessageType::Discover)],
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -39,6 +39,23 @@ pub enum DhcpSender {
 /// Duration to hold an Offer before it expires (seconds)
 const OFFER_HOLD_TIME: u64 = 30;
 
+/// Outcome of the relay-security classification.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RelayDecision {
+    /// Packet is not relayed — skip relay checks.
+    NotRelayed,
+    /// Relayed and accepted.
+    Accept,
+    /// Dropped because `accept_relayed = false`.
+    DroppedDisabled,
+    /// Dropped because giaddr is a bogon or does not match a subnet.
+    DroppedBadGiaddr,
+    /// Dropped because the UDP source IP is not in the subnet's trusted_relays.
+    DroppedUntrustedRelay,
+    /// Dropped by the per-relay-source rate limiter.
+    DroppedRateLimit,
+}
+
 /// Returns true if `source` is an acceptable relay agent for `subnet`.
 /// Empty trusted_relays = accept any source (backwards-compatible default).
 fn relay_source_is_trusted(subnet: &SubnetInfo, source: Ipv4Addr) -> bool {
@@ -174,6 +191,54 @@ impl<H: HaBackend> DhcpV4Server<H> {
         }
     }
 
+    /// Classify a received DHCPv4 packet against the relay security gates.
+    /// Increments the appropriate `stats` counter as a side-effect.
+    pub fn classify_relayed(
+        &self,
+        packet: &DhcpV4Packet,
+        src_addr: SocketAddr,
+    ) -> RelayDecision {
+        if !packet.is_relayed() {
+            return RelayDecision::NotRelayed;
+        }
+        use std::sync::atomic::Ordering;
+        self.stats.relayed_received.fetch_add(1, Ordering::Relaxed);
+
+        if !self.config_accept_relayed {
+            self.stats.relayed_dropped_disabled.fetch_add(1, Ordering::Relaxed);
+            return RelayDecision::DroppedDisabled;
+        }
+        if crate::config::validation::is_bogon_giaddr(packet.giaddr) {
+            self.stats.relayed_dropped_bad_giaddr.fetch_add(1, Ordering::Relaxed);
+            return RelayDecision::DroppedBadGiaddr;
+        }
+        let relay_subnet = match self.subnets.iter().find(|s| {
+            ip_in_subnet(&IpAddr::V4(packet.giaddr), &IpAddr::V4(s.network_addr), s.prefix_len)
+        }) {
+            Some(s) => s,
+            None => {
+                self.stats.relayed_dropped_bad_giaddr.fetch_add(1, Ordering::Relaxed);
+                return RelayDecision::DroppedBadGiaddr;
+            }
+        };
+        let source_ip = match src_addr.ip() {
+            IpAddr::V4(v4) => v4,
+            _ => {
+                self.stats.relayed_dropped_untrusted_relay.fetch_add(1, Ordering::Relaxed);
+                return RelayDecision::DroppedUntrustedRelay;
+            }
+        };
+        if !relay_source_is_trusted(relay_subnet, source_ip) {
+            self.stats.relayed_dropped_untrusted_relay.fetch_add(1, Ordering::Relaxed);
+            return RelayDecision::DroppedUntrustedRelay;
+        }
+        if !self.relay_rate_limiter.check(&source_ip.octets()) {
+            self.stats.relayed_dropped_rate_limit.fetch_add(1, Ordering::Relaxed);
+            return RelayDecision::DroppedRateLimit;
+        }
+        RelayDecision::Accept
+    }
+
     /// Run the DHCPv4 server loop.
     ///
     /// `recv_socket` receives DHCP requests (may be bound to broadcast addr on FreeBSD).
@@ -219,60 +284,22 @@ impl<H: HaBackend> DhcpV4Server<H> {
                 continue;
             }
 
-            // Relay security gates (issue #57 — RFC 3046 hardening)
-            if packet.is_relayed() {
-                use std::sync::atomic::Ordering;
-                self.stats.relayed_received.fetch_add(1, Ordering::Relaxed);
-
-                // Global kill-switch
-                if !self.config_accept_relayed {
-                    self.stats.relayed_dropped_disabled.fetch_add(1, Ordering::Relaxed);
+            // Relay security gates (issue #57) — see classify_relayed.
+            match self.classify_relayed(&packet, src_addr) {
+                RelayDecision::NotRelayed | RelayDecision::Accept => {}
+                RelayDecision::DroppedDisabled => {
                     debug!(src = %src_addr, giaddr = %packet.giaddr, "dropping relayed packet: accept_relayed=false");
                     continue;
                 }
-
-                // Bogon/martian check on giaddr
-                if crate::config::validation::is_bogon_giaddr(packet.giaddr) {
-                    self.stats.relayed_dropped_bad_giaddr.fetch_add(1, Ordering::Relaxed);
-                    warn!(src = %src_addr, giaddr = %packet.giaddr, "dropping relayed packet: bogon giaddr");
+                RelayDecision::DroppedBadGiaddr => {
+                    warn!(src = %src_addr, giaddr = %packet.giaddr, "dropping relayed packet: bogon or unknown-subnet giaddr");
                     continue;
                 }
-
-                // giaddr MUST match a configured subnet
-                let relay_subnet = self.subnets.iter().find(|s| {
-                    ip_in_subnet(
-                        &IpAddr::V4(packet.giaddr),
-                        &IpAddr::V4(s.network_addr),
-                        s.prefix_len,
-                    )
-                });
-                let relay_subnet = match relay_subnet {
-                    Some(s) => s,
-                    None => {
-                        self.stats.relayed_dropped_bad_giaddr.fetch_add(1, Ordering::Relaxed);
-                        warn!(src = %src_addr, giaddr = %packet.giaddr, "dropping relayed packet: giaddr does not match any configured subnet");
-                        continue;
-                    }
-                };
-
-                // Trusted-relay source IP check (per-subnet whitelist)
-                let source_ip = match src_addr.ip() {
-                    IpAddr::V4(v4) => v4,
-                    _ => {
-                        self.stats.relayed_dropped_untrusted_relay.fetch_add(1, Ordering::Relaxed);
-                        continue;
-                    }
-                };
-                if !relay_source_is_trusted(relay_subnet, source_ip) {
-                    self.stats.relayed_dropped_untrusted_relay.fetch_add(1, Ordering::Relaxed);
-                    warn!(src = %src_addr, giaddr = %packet.giaddr, subnet = %relay_subnet.network, "dropping relayed packet: source IP not in trusted_relays");
+                RelayDecision::DroppedUntrustedRelay => {
+                    warn!(src = %src_addr, giaddr = %packet.giaddr, "dropping relayed packet: source IP not in trusted_relays");
                     continue;
                 }
-
-                // Per-relay-source rate limit (additive, in addition to per-MAC)
-                let source_key = source_ip.octets();
-                if !self.relay_rate_limiter.check(&source_key) {
-                    self.stats.relayed_dropped_rate_limit.fetch_add(1, Ordering::Relaxed);
+                RelayDecision::DroppedRateLimit => {
                     debug!(src = %src_addr, "dropping relayed packet: per-relay rate limit");
                     continue;
                 }
