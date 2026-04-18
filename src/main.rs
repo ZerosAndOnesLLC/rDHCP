@@ -315,42 +315,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Spawn receive workers
         // -----------------------------------------------------------------
         for worker_id in 0..worker_count {
-            let recv_sock = socket2::Socket::new(
-                socket2::Domain::IPV4,
-                socket2::Type::DGRAM,
-                Some(socket2::Protocol::UDP),
-            )
-            .map_err(|e| format!("failed to create DHCPv4 recv socket: {}", e))?;
-            recv_sock.set_reuse_port(true)?;
-            recv_sock.set_broadcast(true)?;
-            recv_sock.set_nonblocking(true)?;
+            let bcast_bind = format!("255.255.255.255:{}", dhcpv4_port);
+            let any_bind = format!("0.0.0.0:{}", dhcpv4_port);
 
-            // FreeBSD: enable IP_BINDANY and bind to 255.255.255.255 so the socket
-            // receives broadcast DHCP packets (FreeBSD UDP sockets bound to 0.0.0.0
-            // don't receive link-layer broadcasts)
+            // Build sockets. On FreeBSD we need BOTH a 255.255.255.255:67
+            // socket (to receive link-layer broadcasts — the only way FreeBSD
+            // will deliver them to a UDP socket) AND a 0.0.0.0:67 socket (to
+            // receive unicast packets from a DHCP relay). On other platforms
+            // a single 0.0.0.0:67 catches both.
+            let mut sockets: Vec<Arc<UdpSocket>> = Vec::new();
             #[cfg(target_os = "freebsd")]
             {
-                let enable: libc::c_int = 1;
-                unsafe {
-                    libc::setsockopt(
-                        recv_sock.as_raw_fd(),
-                        libc::IPPROTO_IP,
-                        24, // IP_BINDANY
-                        &enable as *const _ as *const libc::c_void,
-                        std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-                    );
-                }
+                sockets.push(build_recv_socket(&bcast_bind, true)?);
+                sockets.push(build_recv_socket(&any_bind, false)?);
+            }
+            #[cfg(not(target_os = "freebsd"))]
+            {
+                let _ = &bcast_bind; // unused on non-FreeBSD
+                sockets.push(build_recv_socket(&any_bind, false)?);
             }
 
-            #[cfg(target_os = "freebsd")]
-            let bind_addr: std::net::SocketAddr = format!("255.255.255.255:{}", dhcpv4_port).parse().unwrap();
-            #[cfg(not(target_os = "freebsd"))]
-            let bind_addr: std::net::SocketAddr = format!("0.0.0.0:{}", dhcpv4_port).parse().unwrap();
-            recv_sock.bind(&bind_addr.into())
-                .map_err(|e| format!("failed to bind DHCPv4 port {}: {} (try running as root)", dhcpv4_port, e))?;
-            let recv_socket = Arc::new(UdpSocket::from_std(recv_sock.into())?);
-
-            let dhcpv4_server = DhcpV4Server::new(
+            let dhcpv4_server = Arc::new(DhcpV4Server::new(
                 config.clone(),
                 lease_store.clone(),
                 allocators.clone(),
@@ -362,14 +347,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 rogue_detector.clone(),
                 relay_rate_limiter.clone(),
                 dhcpv4_stats.clone(),
-            );
+            ));
 
-            let worker_sender = sender.clone();
-            dhcpv4_handles.push(tokio::spawn(async move {
-                if let Err(e) = dhcpv4_server.run(recv_socket, worker_sender).await {
-                    error!(error = %e, worker = worker_id, "DHCPv4 server error");
-                }
-            }));
+            for (sock_idx, recv_socket) in sockets.into_iter().enumerate() {
+                let server = dhcpv4_server.clone();
+                let worker_sender = sender.clone();
+                dhcpv4_handles.push(tokio::spawn(async move {
+                    if let Err(e) = server.run(recv_socket, worker_sender).await {
+                        error!(error = %e, worker = worker_id, sock_idx, "DHCPv4 server error");
+                    }
+                }));
+            }
         }
         info!(workers = worker_count, "DHCPv4 workers started");
     } else {
@@ -471,6 +459,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("WAL flushed, goodbye");
 
     Ok(())
+}
+
+/// Create a UDP receive socket for DHCPv4.
+///
+/// On FreeBSD, `freebsd_bindany` enables IP_BINDANY so the socket can bind to
+/// 255.255.255.255 (broadcast) or 0.0.0.0 (unicast relay) without holding those
+/// addresses.  On non-FreeBSD the flag is ignored.
+fn build_recv_socket(
+    bind_addr: &str,
+    freebsd_bindany: bool,
+) -> Result<Arc<UdpSocket>, Box<dyn std::error::Error>> {
+    let sock = socket2::Socket::new(
+        socket2::Domain::IPV4,
+        socket2::Type::DGRAM,
+        Some(socket2::Protocol::UDP),
+    )
+    .map_err(|e| format!("failed to create DHCPv4 recv socket: {}", e))?;
+    sock.set_reuse_port(true)?;
+    sock.set_broadcast(true)?;
+    sock.set_nonblocking(true)?;
+
+    #[cfg(target_os = "freebsd")]
+    if freebsd_bindany {
+        let enable: libc::c_int = 1;
+        unsafe {
+            libc::setsockopt(
+                sock.as_raw_fd(),
+                libc::IPPROTO_IP,
+                24, // IP_BINDANY
+                &enable as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            );
+        }
+    }
+    #[cfg(not(target_os = "freebsd"))]
+    let _ = freebsd_bindany;
+
+    let addr: std::net::SocketAddr = bind_addr
+        .parse()
+        .map_err(|e| format!("invalid bind address {}: {}", bind_addr, e))?;
+    sock.bind(&addr.into())
+        .map_err(|e| format!("failed to bind DHCPv4 {}: {} (try running as root)", bind_addr, e))?;
+    Ok(Arc::new(UdpSocket::from_std(sock.into())?))
 }
 
 /// Create a UDP send socket for DHCPv4 replies (fallback when BPF is unavailable).
