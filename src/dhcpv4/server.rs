@@ -292,11 +292,11 @@ impl<H: HaBackend> DhcpV4Server<H> {
                     continue;
                 }
                 RelayDecision::DroppedBadGiaddr => {
-                    warn!(src = %src_addr, giaddr = %packet.giaddr, "dropping relayed packet: bogon or unknown-subnet giaddr");
+                    debug!(src = %src_addr, giaddr = %packet.giaddr, "dropping relayed packet: bogon or unknown-subnet giaddr");
                     continue;
                 }
                 RelayDecision::DroppedUntrustedRelay => {
-                    warn!(src = %src_addr, giaddr = %packet.giaddr, "dropping relayed packet: source IP not in trusted_relays");
+                    debug!(src = %src_addr, giaddr = %packet.giaddr, "dropping relayed packet: source IP not in trusted_relays");
                     continue;
                 }
                 RelayDecision::DroppedRateLimit => {
