@@ -11,6 +11,7 @@ use super::packet::{DhcpV4Packet, MAX_PACKET_SIZE};
 use crate::allocator::SubnetAllocator;
 use crate::config::validation::{ip_in_subnet, parse_cidr, parse_mac};
 use crate::config::{Config, SubnetConfig};
+use crate::dhcpv4::stats::DhcpV4Stats;
 use crate::ha::HaBackend;
 use crate::lease::store::LeaseStore;
 use crate::lease::types::{Lease, LeaseState};
@@ -60,6 +61,12 @@ pub struct DhcpV4Server<H: HaBackend> {
     global_rate_limiter: Option<Arc<GlobalRateLimiter>>,
     /// Rogue client detector
     rogue_detector: Arc<RogueDetector>,
+    /// Per-relay-source rate limiter (keyed by UDP source IP bytes).
+    #[allow(dead_code)]
+    relay_rate_limiter: Arc<RateLimiter>,
+    /// Observability counters for relay handling.
+    #[allow(dead_code)]
+    stats: Arc<DhcpV4Stats>,
     /// Pool utilization high-water mark for alerting
     pool_high_water: f64,
 }
@@ -102,6 +109,8 @@ impl<H: HaBackend> DhcpV4Server<H> {
         rate_limiter: Arc<RateLimiter>,
         global_rate_limiter: Option<Arc<GlobalRateLimiter>>,
         rogue_detector: Arc<RogueDetector>,
+        relay_rate_limiter: Arc<RateLimiter>,
+        stats: Arc<DhcpV4Stats>,
     ) -> Self {
         let subnets: Vec<SubnetInfo> = config
             .subnet
@@ -151,6 +160,8 @@ impl<H: HaBackend> DhcpV4Server<H> {
             rate_limiter,
             global_rate_limiter,
             rogue_detector,
+            relay_rate_limiter,
+            stats,
             pool_high_water,
         }
     }

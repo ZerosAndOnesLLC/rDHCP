@@ -4,7 +4,6 @@ use std::sync::atomic::AtomicU64;
 
 /// Prometheus-exposed counters for DHCPv4 relay handling.
 #[derive(Default)]
-#[allow(dead_code)]
 pub struct DhcpV4Stats {
     /// Total packets received with `giaddr != 0` (before security checks).
     pub relayed_received: AtomicU64,
@@ -18,7 +17,6 @@ pub struct DhcpV4Stats {
     pub relayed_dropped_rate_limit: AtomicU64,
 }
 
-#[allow(dead_code)]
 impl DhcpV4Stats {
     /// Create a new zeroed stats counter set.
     pub fn new() -> Self {

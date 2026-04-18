@@ -90,6 +90,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.global.rogue_threshold,
         config.global.rogue_window_secs,
     ));
+    let relay_rate_limiter = Arc::new(RateLimiter::new(
+        config.global.rate_limit_burst,
+        config.global.rate_limit_pps,
+    ));
+    let dhcpv4_stats = Arc::new(rdhcpd::dhcpv4::stats::DhcpV4Stats::new());
     info!(
         rate_limit_burst = config.global.rate_limit_burst,
         rate_limit_pps = config.global.rate_limit_pps,
@@ -355,6 +360,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 rate_limiter.clone(),
                 global_rate_limiter.clone(),
                 rogue_detector.clone(),
+                relay_rate_limiter.clone(),
+                dhcpv4_stats.clone(),
             );
 
             let worker_sender = sender.clone();

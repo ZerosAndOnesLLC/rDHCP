@@ -1,6 +1,6 @@
 [package]
 name = "rdhcpd"
-version = "0.11.5"
+version = "0.11.6"
 edition = "2024"
 description = "High-performance DHCP server with built-in HA support. Dual-stack (DHCPv4/DHCPv6), active/active and Raft HA, single binary, no external DB."
 license = "MIT"
