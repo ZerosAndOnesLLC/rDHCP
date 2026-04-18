@@ -108,7 +108,6 @@ struct SubnetInfo {
     /// Pre-parsed trusted relay agent source IPs. Empty = accept any relay.
     trusted_relays: Arc<[Ipv4Addr]>,
     /// Pre-serialized generic DHCP option overrides: (code, bytes).
-    #[allow(dead_code)]
     custom_options: Arc<[(u8, Vec<u8>)]>,
 }
 
@@ -977,6 +976,11 @@ impl<H: HaBackend> DhcpV4Server<H> {
             subnet.prefix_len,
         )));
 
+        // Append generic per-subnet option overrides (from `[[subnet.option]]`).
+        for (code, bytes) in subnet.custom_options.iter() {
+            opts.push(DhcpOption::Unknown(*code, bytes.clone()));
+        }
+
         opts
     }
 
@@ -1021,6 +1025,11 @@ impl<H: HaBackend> DhcpV4Server<H> {
 
         if let Some(ref domain) = subnet.config.domain {
             opts.push(DhcpOption::DomainName(domain.clone()));
+        }
+
+        // Append generic per-subnet option overrides (from `[[subnet.option]]`).
+        for (code, bytes) in subnet.custom_options.iter() {
+            opts.push(DhcpOption::Unknown(*code, bytes.clone()));
         }
 
         opts
@@ -1288,5 +1297,66 @@ mod subnet_info_tests {
         );
         let parsed = SubnetInfo::parse_trusted_relays(&cfg);
         assert!(parsed.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod custom_options_tests {
+    use super::*;
+    use crate::config::OptionOverride;
+
+    /// Verify that DhcpOption::Unknown serializes the (code, bytes) pair correctly.
+    /// This is the emission path used for all custom options.
+    #[test]
+    fn unknown_option_serializes_correctly() {
+        let opt = DhcpOption::Unknown(72, vec![10, 0, 0, 5]);
+        let mut buf = [0u8; 16];
+        let len = opt.serialize(&mut buf);
+        // code=72, len=4, then 4 bytes of IP
+        assert_eq!(&buf[..len], &[72, 4, 10, 0, 0, 5]);
+    }
+
+    /// Verify that serialize_option_override produces the bytes that end up
+    /// in a DhcpOption::Unknown payload, and that they round-trip correctly
+    /// through the serializer.
+    #[test]
+    fn custom_option_roundtrip_via_unknown() {
+        let o = OptionOverride {
+            code: 72,
+            ip: Some("10.0.0.5".to_string()),
+            ips: None,
+            string: None,
+            u8_val: None,
+            u16_val: None,
+            u32_val: None,
+            hex: None,
+        };
+        let bytes =
+            crate::config::validation::serialize_option_override(&o).unwrap();
+        assert_eq!(bytes, vec![10, 0, 0, 5]);
+
+        // Wrap in Unknown and verify wire format
+        let opt = DhcpOption::Unknown(o.code, bytes);
+        let mut buf = [0u8; 16];
+        let len = opt.serialize(&mut buf);
+        assert_eq!(&buf[..len], &[72, 4, 10, 0, 0, 5]);
+    }
+
+    /// Verify that custom_options on SubnetInfo are pre-serialized and iterable
+    /// in the same form that build_offer_options uses.
+    #[test]
+    fn subnet_info_custom_options_arc_iteration() {
+        let raw: Vec<(u8, Vec<u8>)> = vec![
+            (72, vec![10, 0, 0, 1]),
+            (77, vec![104, 101, 108, 108, 111]), // "hello"
+        ];
+        let arc: Arc<[(u8, Vec<u8>)]> = Arc::from(raw);
+        let mut collected: Vec<DhcpOption> = Vec::new();
+        for (code, bytes) in arc.iter() {
+            collected.push(DhcpOption::Unknown(*code, bytes.clone()));
+        }
+        assert_eq!(collected.len(), 2);
+        assert_eq!(collected[0].code(), 72);
+        assert_eq!(collected[1].code(), 77);
     }
 }
