@@ -111,12 +111,21 @@ struct SubnetInfo {
 
 impl SubnetInfo {
     /// Parse the raw trusted_relays strings from a SubnetConfig into Ipv4Addr.
-    /// Invalid entries are silently dropped.
+    /// Invalid entries emit a warning and are dropped (never panics).
     fn parse_trusted_relays(cfg: &SubnetConfig) -> Vec<Ipv4Addr> {
-        cfg.trusted_relays
-            .iter()
-            .filter_map(|s| s.parse::<Ipv4Addr>().ok())
-            .collect()
+        let mut out = Vec::with_capacity(cfg.trusted_relays.len());
+        for s in &cfg.trusted_relays {
+            match s.parse::<Ipv4Addr>() {
+                Ok(ip) => out.push(ip),
+                Err(e) => warn!(
+                    subnet = %cfg.network,
+                    entry = %s,
+                    error = %e,
+                    "ignoring malformed trusted_relays entry"
+                ),
+            }
+        }
+        out
     }
 }
 
@@ -1219,6 +1228,20 @@ mod subnet_info_tests {
     #[test]
     fn empty_trusted_relays_parses_to_empty_vec() {
         let cfg = make_subnet("10.0.0.0/24", vec![]);
+        let parsed = SubnetInfo::parse_trusted_relays(&cfg);
+        assert!(parsed.is_empty());
+    }
+
+    #[test]
+    fn malformed_trusted_relays_are_dropped_not_panic() {
+        let cfg = make_subnet(
+            "10.0.0.0/24",
+            vec![
+                "not-an-ip".to_string(),
+                "10.0.0.500".to_string(),
+                "256.1.2.3".to_string(),
+            ],
+        );
         let parsed = SubnetInfo::parse_trusted_relays(&cfg);
         assert!(parsed.is_empty());
     }
