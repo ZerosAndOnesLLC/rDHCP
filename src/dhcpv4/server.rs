@@ -74,6 +74,20 @@ struct SubnetInfo {
     config: Arc<SubnetConfig>,
     /// Per-subnet MAC ACL
     mac_acl: Arc<MacAcl>,
+    /// Pre-parsed trusted relay agent source IPs. Empty = accept any relay.
+    #[allow(dead_code)]
+    trusted_relays: Arc<[Ipv4Addr]>,
+}
+
+impl SubnetInfo {
+    /// Parse the raw trusted_relays strings from a SubnetConfig into Ipv4Addr.
+    /// Invalid entries are silently dropped.
+    fn parse_trusted_relays(cfg: &SubnetConfig) -> Vec<Ipv4Addr> {
+        cfg.trusted_relays
+            .iter()
+            .filter_map(|s| s.parse::<Ipv4Addr>().ok())
+            .collect()
+    }
 }
 
 impl<H: HaBackend> DhcpV4Server<H> {
@@ -117,6 +131,7 @@ impl<H: HaBackend> DhcpV4Server<H> {
                         prefix_len,
                         config: Arc::new(s.clone()),
                         mac_acl,
+                        trusted_relays: Arc::from(SubnetInfo::parse_trusted_relays(s)),
                     })
                 } else {
                     None
@@ -997,5 +1012,53 @@ fn hex_nibble(c: u8) -> Option<u8> {
         b'a'..=b'f' => Some(c - b'a' + 10),
         b'A'..=b'F' => Some(c - b'A' + 10),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod subnet_info_tests {
+    use super::*;
+    use crate::config::SubnetConfig;
+
+    fn make_subnet(network: &str, trusted: Vec<String>) -> SubnetConfig {
+        SubnetConfig {
+            network: network.to_string(),
+            pool_start: None,
+            pool_end: None,
+            lease_time: 3600,
+            max_lease_time: None,
+            renewal_time: None,
+            rebinding_time: None,
+            preferred_time: None,
+            subnet_type: "address".to_string(),
+            delegated_length: None,
+            router: None,
+            dns: vec![],
+            domain: None,
+            ip_probe: false,
+            ip_probe_timeout_ms: None,
+            max_leases_per_mac: 1,
+            mac_allow: vec![],
+            mac_deny: vec![],
+            trusted_relays: trusted,
+            reservation: vec![],
+        }
+    }
+
+    #[test]
+    fn trusted_relays_are_parsed_into_subnet_info() {
+        let cfg = make_subnet(
+            "10.0.0.0/24",
+            vec!["10.0.0.5".to_string(), "invalid".to_string(), "10.0.0.6".to_string()],
+        );
+        let parsed = SubnetInfo::parse_trusted_relays(&cfg);
+        assert_eq!(parsed, vec![Ipv4Addr::new(10, 0, 0, 5), Ipv4Addr::new(10, 0, 0, 6)]);
+    }
+
+    #[test]
+    fn empty_trusted_relays_parses_to_empty_vec() {
+        let cfg = make_subnet("10.0.0.0/24", vec![]);
+        let parsed = SubnetInfo::parse_trusted_relays(&cfg);
+        assert!(parsed.is_empty());
     }
 }
