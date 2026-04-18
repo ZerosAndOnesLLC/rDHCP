@@ -51,6 +51,7 @@ fn make_subnet(
         delegated_length: None,
         router: None,
         dns: vec![],
+        ntp: vec![],
         domain: None,
         ip_probe: false,
         ip_probe_timeout_ms: None,

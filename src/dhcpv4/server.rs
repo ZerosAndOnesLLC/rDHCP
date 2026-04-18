@@ -941,6 +941,16 @@ impl<H: HaBackend> DhcpV4Server<H> {
             opts.push(DhcpOption::DnsServers(dns_addrs));
         }
 
+        let ntp_addrs: Vec<Ipv4Addr> = subnet
+            .config
+            .ntp
+            .iter()
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        if !ntp_addrs.is_empty() {
+            opts.push(DhcpOption::NtpServers(ntp_addrs));
+        }
+
         if let Some(ref domain) = subnet.config.domain {
             opts.push(DhcpOption::DomainName(domain.clone()));
         }
@@ -980,6 +990,16 @@ impl<H: HaBackend> DhcpV4Server<H> {
             .collect();
         if !dns_addrs.is_empty() {
             opts.push(DhcpOption::DnsServers(dns_addrs));
+        }
+
+        let ntp_addrs: Vec<Ipv4Addr> = subnet
+            .config
+            .ntp
+            .iter()
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        if !ntp_addrs.is_empty() {
+            opts.push(DhcpOption::NtpServers(ntp_addrs));
         }
 
         if let Some(ref domain) = subnet.config.domain {
@@ -1151,6 +1171,7 @@ mod relay_gate_tests {
             delegated_length: None,
             router: None,
             dns: vec![],
+            ntp: vec![],
             domain: None,
             ip_probe: false,
             ip_probe_timeout_ms: None,
@@ -1206,6 +1227,7 @@ mod subnet_info_tests {
             delegated_length: None,
             router: None,
             dns: vec![],
+            ntp: vec![],
             domain: None,
             ip_probe: false,
             ip_probe_timeout_ms: None,
