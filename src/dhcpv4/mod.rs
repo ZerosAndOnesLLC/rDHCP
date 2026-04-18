@@ -6,3 +6,5 @@ pub mod options;
 pub mod packet;
 /// DHCPv4 server request handling and response logic.
 pub mod server;
+/// Atomic counters for DHCPv4 relay observability.
+pub mod stats;
