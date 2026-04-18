@@ -56,6 +56,14 @@ pub struct GlobalConfig {
     /// regardless of per-subnet trusted_relays configuration.
     #[serde(default = "default_accept_relayed")]
     pub accept_relayed: bool,
+    /// Per-relay-agent-source rate limit: maximum burst size (packets).
+    /// Higher than the per-MAC default because a single relay aggregates
+    /// many clients. Applied only to packets with `giaddr != 0`.
+    #[serde(default = "default_relay_rate_limit_burst")]
+    pub relay_rate_limit_burst: u32,
+    /// Per-relay-agent-source rate limit: sustained packets per second.
+    #[serde(default = "default_relay_rate_limit_pps")]
+    pub relay_rate_limit_pps: f64,
 }
 
 /// REST API server configuration.
@@ -354,6 +362,14 @@ fn default_accept_relayed() -> bool {
     true
 }
 
+fn default_relay_rate_limit_burst() -> u32 {
+    200
+}
+
+fn default_relay_rate_limit_pps() -> f64 {
+    100.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,6 +399,36 @@ mode = "standalone"
 "#;
         let c: Config = toml::from_str(toml).unwrap();
         assert!(!c.global.accept_relayed);
+    }
+
+    #[test]
+    fn relay_rate_limit_defaults_applied_when_omitted() {
+        let toml = r#"
+[global]
+lease_db = "/tmp/x"
+
+[ha]
+mode = "standalone"
+"#;
+        let c: Config = toml::from_str(toml).unwrap();
+        assert_eq!(c.global.relay_rate_limit_burst, 200);
+        assert!((c.global.relay_rate_limit_pps - 100.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn relay_rate_limit_explicit_values_parse() {
+        let toml = r#"
+[global]
+lease_db = "/tmp/x"
+relay_rate_limit_burst = 500
+relay_rate_limit_pps = 250.0
+
+[ha]
+mode = "standalone"
+"#;
+        let c: Config = toml::from_str(toml).unwrap();
+        assert_eq!(c.global.relay_rate_limit_burst, 500);
+        assert!((c.global.relay_rate_limit_pps - 250.0).abs() < f64::EPSILON);
     }
 
     #[test]

@@ -75,6 +75,8 @@ fn make_global(accept_relayed: bool) -> GlobalConfig {
         rogue_window_secs: 60,
         pool_high_water: 0.9,
         accept_relayed,
+        relay_rate_limit_burst: 100,
+        relay_rate_limit_pps: 100.0,
     }
 }
 

@@ -22,6 +22,8 @@ rogue_window_secs = 60            # sliding window for rogue detection
 pool_high_water = 0.9             # warn when pool utilization exceeds this (0.0-1.0)
 accept_relayed = true             # accept DHCP packets forwarded by a relay agent
                                   # (giaddr != 0). Set false to disable relay support entirely.
+relay_rate_limit_burst = 200      # per-relay-source burst (higher than per-MAC — relays aggregate many clients)
+relay_rate_limit_pps = 100.0      # per-relay-source sustained rate (packets/sec)
 
 # -----------------------------------------------------------------------------
 # REST Management API

@@ -91,8 +91,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.global.rogue_window_secs,
     ));
     let relay_rate_limiter = Arc::new(RateLimiter::new(
-        config.global.rate_limit_burst,
-        config.global.rate_limit_pps,
+        config.global.relay_rate_limit_burst,
+        config.global.relay_rate_limit_pps,
     ));
     let dhcpv4_stats = Arc::new(rdhcpd::dhcpv4::stats::DhcpV4Stats::new());
     info!(
@@ -101,6 +101,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         global_rate_limit = config.global.global_rate_limit_pps,
         rogue_threshold = config.global.rogue_threshold,
         "security: rate limiting and rogue detection initialized"
+    );
+    info!(
+        relay_rate_limit_burst = config.global.relay_rate_limit_burst,
+        relay_rate_limit_pps = config.global.relay_rate_limit_pps,
+        "security: per-relay-source rate limiter initialized"
     );
 
     let config = Arc::new(config);
