@@ -493,6 +493,34 @@ impl<H: HaBackend> DhcpV4Server<H> {
             self.lease_store.get_by_mac(&mac)
         };
 
+        // Reservation takes precedence over any cached lease — otherwise a
+        // MAC that already picked up a pool IP keeps renewing the pool IP
+        // forever, even after an admin adds a reservation for it. If the
+        // existing lease points at a different IP than the reservation,
+        // release it so the reserved IP can be offered cleanly.
+        if let Some(reserved_ip) = self.find_reservation(&subnet, &mac, packet.client_id()) {
+            if let Some(ref existing) = existing_lease {
+                if existing.ip != IpAddr::V4(reserved_ip) {
+                    info!(
+                        mac = %format_mac(&mac),
+                        old_ip = %existing.ip,
+                        reserved_ip = %reserved_ip,
+                        "releasing non-reserved lease in favour of reservation"
+                    );
+                    self.lease_store.remove(&existing.ip);
+                    self.release_ip(&existing.ip);
+                    if let Err(e) = self.wal.log_remove(&existing.ip).await {
+                        warn!(error = %e, ip = %existing.ip, "WAL log_remove failed for reservation takeover");
+                    }
+                }
+            }
+            let options = self.build_offer_options(&subnet);
+            let reply =
+                packet.build_reply(MessageType::Offer, reserved_ip, self.server_ip, options);
+            self.record_offer(&subnet, reserved_ip, packet).await?;
+            return Ok(Some(reply));
+        }
+
         if let Some(existing) = existing_lease {
             if existing.is_active() {
                 if let IpAddr::V4(v4) = existing.ip {
@@ -502,17 +530,6 @@ impl<H: HaBackend> DhcpV4Server<H> {
                     return Ok(Some(reply));
                 }
             }
-        }
-
-        // Check for reservation
-        if let Some(reserved_ip) = self.find_reservation(&subnet, &mac, packet.client_id()) {
-            let options = self.build_offer_options(&subnet);
-            let reply =
-                packet.build_reply(MessageType::Offer, reserved_ip, self.server_ip, options);
-
-            // Record the offer
-            self.record_offer(&subnet, reserved_ip, packet).await?;
-            return Ok(Some(reply));
         }
 
         // Check if client is requesting a specific IP
@@ -632,6 +649,18 @@ impl<H: HaBackend> DhcpV4Server<H> {
 
         let mac = packet.mac();
         let ip_addr = IpAddr::V4(requested_ip);
+
+        // If a reservation exists for this client but points at a different
+        // IP, NAK so the client falls back to INIT and re-Discovers. Without
+        // this, an INIT-REBOOT request carrying a stale pool IP (e.g. after
+        // unplug/replug) silently keeps the wrong address forever.
+        if let Some(reserved_ip) = self.find_reservation(&subnet, &mac, packet.client_id()) {
+            if reserved_ip != requested_ip {
+                return Ok(Some(
+                    self.build_nak(packet, "MAC has reservation for different IP"),
+                ));
+            }
+        }
 
         // Cross-subnet MAC migration (issue #63): clean up any stale lease
         // this MAC holds in a different subnet before committing the new one,
@@ -856,33 +885,15 @@ impl<H: HaBackend> DhcpV4Server<H> {
         }).cloned()
     }
 
-    /// Find a reservation for this client
+    /// Find a reservation for this client (instance wrapper around the pure
+    /// helper so callers on `self` keep a clean call-site).
     fn find_reservation(
         &self,
         subnet: &SubnetInfo,
         mac: &[u8; 6],
         client_id: Option<&[u8]>,
     ) -> Option<Ipv4Addr> {
-        for res in &subnet.config.reservation {
-            // Check MAC match
-            if let Some(ref res_mac) = res.mac {
-                if let Ok(parsed) = crate::config::validation::parse_mac(res_mac) {
-                    if &parsed == mac {
-                        return res.ip.parse().ok();
-                    }
-                }
-            }
-
-            // Check client ID match
-            if let (Some(res_cid), Some(pkt_cid)) = (&res.client_id, client_id) {
-                if let Some(parsed) = decode_hex(res_cid) {
-                    if parsed == pkt_cid {
-                        return res.ip.parse().ok();
-                    }
-                }
-            }
-        }
-        None
+        find_reservation_for(&subnet.config.reservation, mac, client_id)
     }
 
     /// Record an Offer in the lease store with a short hold time
@@ -1178,6 +1189,32 @@ fn format_mac(mac: &[u8; 6]) -> MacDisplay {
     MacDisplay(*mac)
 }
 
+/// Pure reservation lookup — returns the reserved IPv4 address if `mac` (or
+/// the packet's client-id) matches any entry in `reservations`.
+pub(crate) fn find_reservation_for(
+    reservations: &[crate::config::ReservationConfig],
+    mac: &[u8; 6],
+    client_id: Option<&[u8]>,
+) -> Option<Ipv4Addr> {
+    for res in reservations {
+        if let Some(ref res_mac) = res.mac {
+            if let Ok(parsed) = crate::config::validation::parse_mac(res_mac) {
+                if &parsed == mac {
+                    return res.ip.parse().ok();
+                }
+            }
+        }
+        if let (Some(res_cid), Some(pkt_cid)) = (&res.client_id, client_id) {
+            if let Some(parsed) = decode_hex(res_cid) {
+                if parsed == pkt_cid {
+                    return res.ip.parse().ok();
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Decode a hex string (e.g. "aabbcc") into bytes. Returns None on invalid input.
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
     // Strip optional separators
@@ -1323,6 +1360,108 @@ mod subnet_info_tests {
         );
         let parsed = SubnetInfo::parse_trusted_relays(&cfg);
         assert!(parsed.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod reservation_tests {
+    use super::*;
+    use crate::config::ReservationConfig;
+
+    fn res(mac: Option<&str>, client_id: Option<&str>, ip: &str) -> ReservationConfig {
+        ReservationConfig {
+            mac: mac.map(str::to_string),
+            client_id: client_id.map(str::to_string),
+            duid: None,
+            ip: ip.to_string(),
+            hostname: None,
+            dns: None,
+            router: None,
+        }
+    }
+
+    #[test]
+    fn mac_match_returns_reserved_ip() {
+        let reservations = vec![res(Some("bc:24:11:a7:4a:2b"), None, "172.29.11.19")];
+        let mac: [u8; 6] = [0xbc, 0x24, 0x11, 0xa7, 0x4a, 0x2b];
+        assert_eq!(
+            find_reservation_for(&reservations, &mac, None),
+            Some(Ipv4Addr::new(172, 29, 11, 19)),
+        );
+    }
+
+    #[test]
+    fn non_matching_mac_returns_none() {
+        let reservations = vec![res(Some("bc:24:11:a7:4a:2b"), None, "172.29.11.19")];
+        let other_mac: [u8; 6] = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+        assert!(find_reservation_for(&reservations, &other_mac, None).is_none());
+    }
+
+    #[test]
+    fn client_id_match_returns_reserved_ip() {
+        let reservations = vec![res(None, Some("01bc2411a74a2b"), "10.0.0.42")];
+        let mac: [u8; 6] = [0; 6];
+        let cid: &[u8] = &[0x01, 0xbc, 0x24, 0x11, 0xa7, 0x4a, 0x2b];
+        assert_eq!(
+            find_reservation_for(&reservations, &mac, Some(cid)),
+            Some(Ipv4Addr::new(10, 0, 0, 42)),
+        );
+    }
+
+    #[test]
+    fn mac_match_wins_over_later_client_id_entry() {
+        let reservations = vec![
+            res(Some("bc:24:11:a7:4a:2b"), None, "172.29.11.19"),
+            res(None, Some("0100112233445566"), "10.9.9.9"),
+        ];
+        let mac: [u8; 6] = [0xbc, 0x24, 0x11, 0xa7, 0x4a, 0x2b];
+        assert_eq!(
+            find_reservation_for(&reservations, &mac, Some(&[0x01, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66])),
+            Some(Ipv4Addr::new(172, 29, 11, 19)),
+        );
+    }
+
+    #[test]
+    fn malformed_reservation_mac_is_skipped() {
+        let reservations = vec![
+            res(Some("not-a-mac"), None, "1.2.3.4"),
+            res(Some("bc:24:11:a7:4a:2b"), None, "172.29.11.19"),
+        ];
+        let mac: [u8; 6] = [0xbc, 0x24, 0x11, 0xa7, 0x4a, 0x2b];
+        assert_eq!(
+            find_reservation_for(&reservations, &mac, None),
+            Some(Ipv4Addr::new(172, 29, 11, 19)),
+        );
+    }
+
+    #[test]
+    fn malformed_reservation_ip_returns_none() {
+        let reservations = vec![res(Some("bc:24:11:a7:4a:2b"), None, "not-an-ip")];
+        let mac: [u8; 6] = [0xbc, 0x24, 0x11, 0xa7, 0x4a, 0x2b];
+        assert!(find_reservation_for(&reservations, &mac, None).is_none());
+    }
+
+    /// Simulates the INIT-REBOOT NAK decision in handle_request: if the
+    /// helper returns a reserved IP that differs from the requested IP,
+    /// the caller NAKs. This guards the regression the user hit when an
+    /// unplug/replug silently re-acquired the old pool IP.
+    #[test]
+    fn request_for_wrong_ip_would_nak_when_reservation_present() {
+        let reservations = vec![res(Some("bc:24:11:a7:4a:2b"), None, "172.29.11.19")];
+        let mac: [u8; 6] = [0xbc, 0x24, 0x11, 0xa7, 0x4a, 0x2b];
+        let requested = Ipv4Addr::new(172, 29, 11, 20);
+        let reserved = find_reservation_for(&reservations, &mac, None);
+        assert_eq!(reserved, Some(Ipv4Addr::new(172, 29, 11, 19)));
+        assert!(reserved != Some(requested), "would NAK since reservation ≠ requested");
+    }
+
+    #[test]
+    fn request_for_reserved_ip_passes_through() {
+        let reservations = vec![res(Some("bc:24:11:a7:4a:2b"), None, "172.29.11.19")];
+        let mac: [u8; 6] = [0xbc, 0x24, 0x11, 0xa7, 0x4a, 0x2b];
+        let requested = Ipv4Addr::new(172, 29, 11, 19);
+        let reserved = find_reservation_for(&reservations, &mac, None);
+        assert_eq!(reserved, Some(requested), "reservation matches → no NAK");
     }
 }
 
