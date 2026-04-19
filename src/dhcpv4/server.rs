@@ -476,25 +476,13 @@ impl<H: HaBackend> DhcpV4Server<H> {
             return Ok(None);
         }
 
-        // Max leases per MAC check
-        let max_leases = subnet.config.max_leases_per_mac;
-        if max_leases > 0 {
-            if let Some(existing) = self.lease_store.get_by_mac(&mac) {
-                if existing.is_active() && *existing.subnet != *subnet.network {
-                    // Client has an active lease in a different subnet — count it
-                    let lease_count = self.count_active_leases_for_mac(&mac);
-                    if lease_count >= max_leases as usize {
-                        warn!(
-                            mac = %format_mac(&mac),
-                            active_leases = lease_count,
-                            max = max_leases,
-                            "max leases per MAC exceeded"
-                        );
-                        return Ok(None);
-                    }
-                }
-            }
-        }
+        // Cross-subnet MAC migration (issue #63):
+        // If this MAC holds an active lease in a *different* subnet, treat it
+        // as stale — a client cannot be on two L2 segments at once. Release
+        // the old lease so normal allocation can proceed instead of silently
+        // hitting the per-MAC cap.
+        self.release_stale_cross_subnet_lease(&mac, &subnet.network)
+            .await;
 
         // Check for existing lease for this client.
         // Per RFC 2131 §4.2: if client_id (option 61) is present, use it as
@@ -644,6 +632,12 @@ impl<H: HaBackend> DhcpV4Server<H> {
 
         let mac = packet.mac();
         let ip_addr = IpAddr::V4(requested_ip);
+
+        // Cross-subnet MAC migration (issue #63): clean up any stale lease
+        // this MAC holds in a different subnet before committing the new one,
+        // so we don't leak orphaned entries behind the mac_index remap.
+        self.release_stale_cross_subnet_lease(&mac, &subnet.network)
+            .await;
 
         // Check if there's an existing lease
         if let Some(existing) = self.lease_store.get(&ip_addr) {
@@ -819,11 +813,6 @@ impl<H: HaBackend> DhcpV4Server<H> {
         reply.ciaddr = packet.ciaddr;
 
         Ok(Some(reply))
-    }
-
-    /// Count active leases held by a MAC across all subnets.
-    fn count_active_leases_for_mac(&self, mac: &[u8; 6]) -> usize {
-        self.lease_store.count_active_for_mac(mac)
     }
 
     /// Select the appropriate subnet for a packet.
@@ -1131,6 +1120,43 @@ impl<H: HaBackend> DhcpV4Server<H> {
                 return;
             }
         }
+    }
+
+    /// Release a stale cross-subnet lease held by `mac` if the active lease
+    /// belongs to a subnet other than `current_subnet`.
+    ///
+    /// A MAC cannot legitimately be on two L2 segments at once, so an active
+    /// lease in a *different* subnet is treated as stale the moment the
+    /// client appears via a relay for a new subnet. Releasing it lets the
+    /// normal allocation path proceed instead of silently hitting the
+    /// per-MAC cap. Returns the released IP (if any) for metrics/logging.
+    ///
+    /// No-ops for: no lease, inactive lease, or same-subnet lease.
+    pub async fn release_stale_cross_subnet_lease(
+        &self,
+        mac: &[u8; 6],
+        current_subnet: &str,
+    ) -> Option<IpAddr> {
+        let existing = self.lease_store.get_by_mac(mac)?;
+        if !existing.is_active() || &*existing.subnet == current_subnet {
+            return None;
+        }
+
+        info!(
+            mac = %format_mac(mac),
+            old_ip = %existing.ip,
+            old_subnet = %existing.subnet,
+            new_subnet = %current_subnet,
+            "releasing stale cross-subnet lease"
+        );
+
+        self.lease_store.remove(&existing.ip);
+        self.release_ip(&existing.ip);
+        if let Err(e) = self.wal.log_remove(&existing.ip).await {
+            warn!(error = %e, ip = %existing.ip, "WAL log_remove failed for cross-subnet release");
+        }
+
+        Some(existing.ip)
     }
 }
 

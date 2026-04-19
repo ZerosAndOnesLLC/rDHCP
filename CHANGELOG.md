@@ -5,6 +5,11 @@ All notable changes to rDHCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.2] - 2026-04-19
+
+### Fixed
+- **DHCPv4: cross-subnet MAC migration no longer hangs clients.** When a MAC with an active lease in subnet A was seen via a relay on subnet B (e.g., a VM whose NIC was moved to a different VLAN bridge), the server silently refused to offer a lease because the `max_leases_per_mac` cap counted the stale subnet-A lease. Clients had no feedback (no DHCPNAK) and DHCP would appear broken until the stale lease expired or an operator deleted it manually. The server now treats an active lease in a different subnet as stale on DISCOVER / REQUEST, releases it (lease store + allocator + WAL), and proceeds with normal allocation on the new subnet. (Fixes #63.)
+
 ## [0.13.0] - 2026-04-17
 
 ### Added
