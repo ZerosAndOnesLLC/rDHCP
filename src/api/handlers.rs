@@ -241,6 +241,7 @@ pub async fn health_check<H: HaBackend>(
     let ha_status = state.ha.status();
     Ok(Json(serde_json::json!({
         "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
         "ha_mode": ha_status.mode,
         "ha_healthy": ha_status.healthy,
     })))
