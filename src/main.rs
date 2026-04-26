@@ -3,6 +3,9 @@ use std::os::unix::io::AsRawFd;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
+#[cfg(unix)]
+mod single_instance;
+
 use rdhcpd::{allocator, api, lease};
 use rdhcpd::api::ApiState;
 #[cfg(target_os = "freebsd")]
@@ -27,6 +30,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
+
+    // Refuse to start if another rdhcpd instance already holds the lock.
+    #[cfg(unix)]
+    let _instance_lock = match single_instance::acquire("rdhcpd") {
+        Ok(lock) => lock,
+        Err(e) => {
+            eprintln!("rdhcpd: {e}");
+            std::process::exit(1);
+        }
+    };
 
     // Load configuration
     let config_path = std::env::args()

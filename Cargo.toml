@@ -1,6 +1,6 @@
 [package]
 name = "rdhcpd"
-version = "0.14.0"
+version = "0.14.1"
 edition = "2024"
 description = "High-performance DHCP server with built-in HA support. Dual-stack (DHCPv4/DHCPv6), active/active and Raft HA, single binary, no external DB."
 license = "MIT"
@@ -79,8 +79,8 @@ tower-http = { version = "0.6", features = ["cors"] }
 # Socket options (SO_REUSEPORT)
 socket2 = { version = "0.5", features = ["all"] }
 
-# Signal handling
-nix = { version = "0.30", features = ["signal"] }
+# Signal handling + lockfile fcntl (single-instance enforcement)
+nix = { version = "0.30", features = ["signal", "fs", "process"] }
 
 # Platform-specific syscalls (FreeBSD IP_BINDANY)
 [target.'cfg(target_os = "freebsd")'.dependencies]
