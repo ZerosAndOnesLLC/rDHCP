@@ -650,7 +650,7 @@ dependencies = [
 
 [[package]]
 name = "rdhcpd"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "axum",
  "base64",

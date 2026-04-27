@@ -31,13 +31,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
-    // Refuse to start if another rdhcpd instance already holds the lock.
+    // Refuse to start when another instance actually holds the lock; warn
+    // and continue when the lockfile path isn't writable.
     #[cfg(unix)]
     let _instance_lock = match single_instance::acquire("rdhcpd") {
-        Ok(lock) => lock,
-        Err(e) => {
-            eprintln!("rdhcpd: {e}");
+        Ok(lock) => Some(lock),
+        Err(single_instance::InstanceLockError::AlreadyRunning(pid)) => {
+            eprintln!("rdhcpd: another instance is already running (pid {pid})");
             std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("rdhcpd: warning: singleton lock unavailable: {e} (continuing)");
+            None
         }
     };
 
