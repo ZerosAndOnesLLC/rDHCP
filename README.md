@@ -537,6 +537,51 @@ sudo ./bench/run.sh
 | `tsig_secret` | string | none | Base64-encoded TSIG secret |
 | `ttl` | int | `300` | TTL for dynamic records |
 
+## AiFw HA Integration
+
+When AiFw is deployed in active-passive cluster mode (CARP-based failover), it can
+automatically populate the rDHCP HA peer list by writing into this server's config
+file at `/usr/local/etc/rdhcpd/config.toml`.
+
+### How it works
+
+AiFw maintains a `cluster_nodes` table listing all peer nodes and their addresses.
+When `pfsync_config.dhcp_link = true` is set in AiFw's cluster config, AiFw calls
+`update_ha_config` on SIGHUP or role-change events, which rewrites the `[ha]` section
+of rDHCP's config TOML with the correct peer addresses derived from `cluster_nodes`.
+rDHCP picks up the new peer list on the next SIGHUP (or restart).
+
+### What AiFw does NOT configure
+
+AiFw only writes the peer address(es). The operator must still configure:
+
+- `mode = "active-active"` or `mode = "raft"` in the `[ha]` section
+- `tls_cert`, `tls_key`, `tls_ca` — mutual TLS material for HA peer channels
+- `mclt` (Max Client Lead Time) and `partner_down_delay` for active-active
+- `node_id` for Raft mode
+
+### DHCP and CARP: no special binding required
+
+DHCPv4 operates on link-layer broadcasts (destination `255.255.255.255`).
+On FreeBSD, rDHCP's receive sockets bind to `0.0.0.0:67` (for relay unicast) and
+`255.255.255.255:67` (for direct broadcast) — both of which accept traffic regardless
+of which node currently holds the CARP virtual IP. There is no need to bind rDHCP to
+the CARP VIP explicitly.
+
+On failover, the new CARP master begins receiving broadcast DHCP traffic on its
+physical interface immediately. Existing leases held in the HA-replicated lease store
+remain valid; clients renewing before their T1 will be served by the new master
+without interruption.
+
+### Peer-list push API (future work)
+
+Currently AiFw triggers peer list updates via config-file rewrite + SIGHUP. A future
+enhancement would expose a `POST /api/v1/ha/peers` endpoint on rDHCP so AiFw can
+push peer changes mid-flight without touching the config file. This is tracked as a
+follow-up: the change requires making the config dynamically mutable (adding
+`RwLock<Config>` and extending the `HaBackend` trait), which is deferred until the
+active-active and Raft HA backends are implemented.
+
 ## License
 
 MIT
