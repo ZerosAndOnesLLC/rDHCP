@@ -130,8 +130,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Start lease expiry background task
     let expiry_store = lease_store.clone();
+    let expiry_allocators = allocators.clone();
     let expiry_handle = tokio::spawn(async move {
-        lease::expiry::run_expiry_task(expiry_store).await;
+        lease::expiry::run_expiry_task(expiry_store, expiry_allocators).await;
     });
 
     // Start management API if configured
