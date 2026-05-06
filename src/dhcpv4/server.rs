@@ -485,13 +485,15 @@ impl<H: HaBackend> DhcpV4Server<H> {
             .await;
 
         // Check for existing lease for this client.
-        // Per RFC 2131 §4.2: if client_id (option 61) is present, use it as
-        // the primary lookup key; otherwise fall back to MAC.
-        let existing_lease = if let Some(cid) = packet.client_id() {
-            self.lease_store.get_by_client_id(cid)
-        } else {
-            self.lease_store.get_by_mac(&mac)
-        };
+        // Per RFC 2131 §4.2: client_id (option 61) is the primary lookup key
+        // when present. We *also* fall back to MAC on a cid miss so that a
+        // client whose option 61 rotates between sessions (common on OS
+        // reinstalls — same NIC, fresh DUID/client-id) still recovers its
+        // previous binding instead of being treated as a brand-new client.
+        let existing_lease = packet
+            .client_id()
+            .and_then(|cid| self.lease_store.get_by_client_id(cid))
+            .or_else(|| self.lease_store.get_by_mac(&mac));
 
         // Reservation takes precedence over any cached lease — otherwise a
         // MAC that already picked up a pool IP keeps renewing the pool IP
