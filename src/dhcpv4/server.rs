@@ -485,13 +485,15 @@ impl<H: HaBackend> DhcpV4Server<H> {
             .await;
 
         // Check for existing lease for this client.
-        // Per RFC 2131 §4.2: if client_id (option 61) is present, use it as
-        // the primary lookup key; otherwise fall back to MAC.
-        let existing_lease = if let Some(cid) = packet.client_id() {
-            self.lease_store.get_by_client_id(cid)
-        } else {
-            self.lease_store.get_by_mac(&mac)
-        };
+        // Per RFC 2131 §4.2: client_id (option 61) is the primary lookup key
+        // when present. We *also* fall back to MAC on a cid miss so that a
+        // client whose option 61 rotates between sessions (common on OS
+        // reinstalls — same NIC, fresh DUID/client-id) still recovers its
+        // previous binding instead of being treated as a brand-new client.
+        let existing_lease = packet
+            .client_id()
+            .and_then(|cid| self.lease_store.get_by_client_id(cid))
+            .or_else(|| self.lease_store.get_by_mac(&mac));
 
         // Reservation takes precedence over any cached lease — otherwise a
         // MAC that already picked up a pool IP keeps renewing the pool IP
@@ -521,13 +523,43 @@ impl<H: HaBackend> DhcpV4Server<H> {
             return Ok(Some(reply));
         }
 
+        // RFC 2131 §4.3.1: prefer the client's current binding, else its
+        // previous (now expired/released) binding if that address is still in
+        // the pool and not held by another client. Honouring the second
+        // bullet keeps a returning client on its prior IP across an expiry
+        // window — a hard requirement for "OS reinstall keeps same IP".
         if let Some(existing) = existing_lease {
-            if existing.is_active() {
-                if let IpAddr::V4(v4) = existing.ip {
-                    // Offer the same IP they already have
-                    let options = self.build_offer_options(&subnet);
-                    let reply = packet.build_reply(MessageType::Offer, v4, self.server_ip, options);
-                    return Ok(Some(reply));
+            if let IpAddr::V4(v4) = existing.ip {
+                if let Some(allocator) = self.allocators.get(&*subnet.network) {
+                    if allocator.contains(&existing.ip) {
+                        let offer_same = if existing.is_active() {
+                            // Already ours in the bitmap — nothing to reclaim.
+                            true
+                        } else if !self.lease_store.is_allocated(&existing.ip)
+                            && allocator.allocate_specific(&existing.ip)
+                        {
+                            // Expired/released and free — reclaim the bit.
+                            true
+                        } else {
+                            false
+                        };
+
+                        if offer_same {
+                            let options = self.build_offer_options(&subnet);
+                            let reply = packet.build_reply(
+                                MessageType::Offer,
+                                v4,
+                                self.server_ip,
+                                options,
+                            );
+                            if !existing.is_active() {
+                                // Refresh the cached record to Offered state
+                                // so renewal/REQUEST sees a fresh binding.
+                                self.record_offer(&subnet, v4, packet).await?;
+                            }
+                            return Ok(Some(reply));
+                        }
+                    }
                 }
             }
         }
@@ -1168,6 +1200,17 @@ impl<H: HaBackend> DhcpV4Server<H> {
         }
 
         Some(existing.ip)
+    }
+}
+
+#[cfg(any(test, feature = "test-helpers"))]
+impl<H: HaBackend> DhcpV4Server<H> {
+    /// Test helper: directly invoke the DHCPDISCOVER handler.
+    pub async fn handle_discover_for_test(
+        &self,
+        packet: &DhcpV4Packet,
+    ) -> Result<Option<DhcpV4Packet>, Box<dyn std::error::Error + Send + Sync>> {
+        self.handle_discover(packet).await
     }
 }
 
