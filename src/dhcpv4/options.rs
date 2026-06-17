@@ -42,9 +42,9 @@ impl MessageType {
 }
 
 /// Well-known DHCP option codes (RFC 2132).
+///
+/// Numeric constants for standard DHCP option codes.
 pub mod code {
-    //! Numeric constants for standard DHCP option codes.
-
     /// Padding byte (option 0).
     pub const PAD: u8 = 0;
     /// Subnet mask (option 1).
@@ -176,7 +176,7 @@ impl DhcpOption {
                     ))
                 }
                 code::ROUTER => {
-                    if opt_len % 4 != 0 || opt_len == 0 {
+                    if !opt_len.is_multiple_of(4) || opt_len == 0 {
                         return Err(PacketError::MalformedOption(pos));
                     }
                     let addrs = opt_data
@@ -186,7 +186,7 @@ impl DhcpOption {
                     DhcpOption::Router(addrs)
                 }
                 code::DNS => {
-                    if opt_len % 4 != 0 || opt_len == 0 {
+                    if !opt_len.is_multiple_of(4) || opt_len == 0 {
                         return Err(PacketError::MalformedOption(pos));
                     }
                     let addrs = opt_data
@@ -196,7 +196,7 @@ impl DhcpOption {
                     DhcpOption::DnsServers(addrs)
                 }
                 code::NTP => {
-                    if opt_len % 4 != 0 || opt_len == 0 {
+                    if !opt_len.is_multiple_of(4) || opt_len == 0 {
                         return Err(PacketError::MalformedOption(pos));
                     }
                     let addrs = opt_data
@@ -545,6 +545,18 @@ pub fn prefix_to_mask(prefix_len: u8) -> Ipv4Addr {
     Ipv4Addr::from(mask.to_be_bytes())
 }
 
+/// Compute the broadcast address for a network
+pub fn broadcast_addr(network: Ipv4Addr, prefix_len: u8) -> Ipv4Addr {
+    let net = u32::from_be_bytes(network.octets());
+    let mask = if prefix_len >= 32 {
+        u32::MAX
+    } else {
+        !((1u32 << (32 - prefix_len)) - 1)
+    };
+    let bcast = net | !mask;
+    Ipv4Addr::from(bcast.to_be_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -586,16 +598,4 @@ mod tests {
             needed
         );
     }
-}
-
-/// Compute the broadcast address for a network
-pub fn broadcast_addr(network: Ipv4Addr, prefix_len: u8) -> Ipv4Addr {
-    let net = u32::from_be_bytes(network.octets());
-    let mask = if prefix_len >= 32 {
-        u32::MAX
-    } else {
-        !((1u32 << (32 - prefix_len)) - 1)
-    };
-    let bcast = net | !mask;
-    Ipv4Addr::from(bcast.to_be_bytes())
 }

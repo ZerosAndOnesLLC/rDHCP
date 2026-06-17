@@ -3,7 +3,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, Mac, digest::KeyInit};
 use sha2::Sha256;
 
 use super::dns::encode_name;

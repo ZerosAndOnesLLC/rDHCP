@@ -137,6 +137,7 @@ fn now_secs() -> u64 {
         .as_secs()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn seed_lease(
     lease_store: &LeaseStore,
     allocators: &HashMap<String, SubnetAllocator>,
@@ -161,11 +162,10 @@ fn seed_lease(
         expires_at: Instant::now() + Duration::from_secs(expire_in_secs.max(0) as u64),
         subnet: Arc::from(subnet),
     };
-    if matches!(state, LeaseState::Offered | LeaseState::Bound) {
-        if let Some(alloc) = allocators.get(subnet) {
+    if matches!(state, LeaseState::Offered | LeaseState::Bound)
+        && let Some(alloc) = allocators.get(subnet) {
             alloc.allocate_specific(&IpAddr::V4(ip));
         }
-    }
     lease_store.upsert(lease);
 }
 

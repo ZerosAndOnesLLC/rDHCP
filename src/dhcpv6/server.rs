@@ -55,6 +55,7 @@ struct V6SubnetInfo {
 
 impl<H: HaBackend> DhcpV6Server<H> {
     /// Create a new DHCPv6 server, parsing IPv6 subnets from the config.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<Config>,
         lease_store: LeaseStore,
@@ -123,12 +124,11 @@ impl<H: HaBackend> DhcpV6Server<H> {
             }
 
             // Global rate limiting
-            if let Some(ref global_rl) = self.global_rate_limiter {
-                if !global_rl.check() {
+            if let Some(ref global_rl) = self.global_rate_limiter
+                && !global_rl.check() {
                     debug!("DHCPv6 packet dropped by global rate limiter");
                     continue;
                 }
-            }
 
             // Check if this is a relay message
             let msg_type_byte = data[0];
@@ -347,11 +347,10 @@ impl<H: HaBackend> DhcpV6Server<H> {
         msg: &Dhcpv6Message,
     ) -> Result<Option<Dhcpv6Message>, Box<dyn std::error::Error + Send + Sync>> {
         // Verify server ID matches us
-        if let Some(server_id) = msg.server_id() {
-            if server_id != self.server_duid {
+        if let Some(server_id) = msg.server_id()
+            && server_id != self.server_duid {
                 return Ok(None); // Not for us
             }
-        }
 
         let client_id = match msg.client_id() {
             Some(c) => c.to_vec(),
@@ -447,15 +446,14 @@ impl<H: HaBackend> DhcpV6Server<H> {
                 for sub_opt in &ia.options {
                     if let Dhcpv6Option::IaAddr(ia_addr) = sub_opt {
                         let ip = IpAddr::V6(ia_addr.addr);
-                        if let Some(existing) = self.lease_store.get(&ip) {
-                            if existing.client_id.as_deref() == Some(&client_id) {
+                        if let Some(existing) = self.lease_store.get(&ip)
+                            && existing.client_id.as_deref() == Some(&client_id) {
                                 self.ha.release_lease(&ip).await?;
                                 self.wal.log_remove(&ip).await?;
                                 self.lease_store.remove(&ip);
                                 self.release_ip(&ip);
                                 info!(ip = %ia_addr.addr, "DHCPv6 lease released");
                             }
-                        }
                     }
                 }
             }
@@ -646,9 +644,9 @@ impl<H: HaBackend> DhcpV6Server<H> {
         };
 
         // Check for existing lease
-        if let Some(existing) = self.lease_store.get_by_client_id(client_id) {
-            if existing.is_active() {
-                if let IpAddr::V6(v6) = existing.ip {
+        if let Some(existing) = self.lease_store.get_by_client_id(client_id)
+            && existing.is_active()
+                && let IpAddr::V6(v6) = existing.ip {
                     let lease_time = subnet.config.lease_time;
                     let preferred = subnet.config.preferred_time.unwrap_or(lease_time / 2);
                     return Ok(IaNa {
@@ -663,8 +661,6 @@ impl<H: HaBackend> DhcpV6Server<H> {
                         })],
                     });
                 }
-            }
-        }
 
         // Allocate from pool
         let allocator = match self.allocators.get(&*subnet.network) {

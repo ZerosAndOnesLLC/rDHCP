@@ -49,6 +49,7 @@ struct FailoverState {
 
 impl ActiveActiveBackend {
     /// Create a new active/active backend with the given split-scope configuration.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         node_id: String,
         peer_addr: String,
@@ -186,16 +187,12 @@ impl ActiveActiveBackend {
                     };
                     drop(state);
 
-                    if let Err(e) = write_message(&mut tls_stream, &heartbeat).await {
-                        return Err(e);
-                    }
+                    write_message(&mut tls_stream, &heartbeat).await?;
                 }
                 msg = peer_rx.recv() => {
                     match msg {
                         Some(ha_msg) => {
-                            if let Err(e) = write_message(&mut tls_stream, &ha_msg).await {
-                                return Err(e);
-                            }
+                            write_message(&mut tls_stream, &ha_msg).await?;
                         }
                         None => return Ok(()), // channel closed
                     }
@@ -386,17 +383,15 @@ impl ActiveActiveBackend {
             let mut state = self.state.write().await;
 
             // Check if we should transition from CI → PartnerDown
-            if state.peer_state == PeerState::CommunicationsInterrupted {
-                if let Some(entered) = state.entered_interrupted {
-                    if entered.elapsed() >= Duration::from_secs(self.partner_down_delay as u64) {
+            if state.peer_state == PeerState::CommunicationsInterrupted
+                && let Some(entered) = state.entered_interrupted
+                    && entered.elapsed() >= Duration::from_secs(self.partner_down_delay as u64) {
                         state.peer_state = PeerState::PartnerDown;
                         warn!(
                             delay = self.partner_down_delay,
                             "partner-down delay expired, taking over full scope"
                         );
                     }
-                }
-            }
 
             // Check for stale heartbeats in Normal state
             if state.peer_state == PeerState::Normal && state.peer_reachable {

@@ -1,9 +1,10 @@
-/// Minimal DNS message builder for RFC 2136 UPDATE messages.
-/// Not a full DNS library — just enough for dynamic updates.
+//! Minimal DNS message builder for RFC 2136 UPDATE messages.
+//! Not a full DNS library — just enough for dynamic updates.
 
 /// DNS record types
 #[derive(Debug, Clone, Copy)]
 #[repr(u16)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum DnsType {
     A = 1,
     SOA = 6,
@@ -15,6 +16,7 @@ pub enum DnsType {
 #[derive(Debug, Clone, Copy)]
 #[repr(u16)]
 #[allow(dead_code)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum DnsClass {
     IN = 1,
     ANY = 255,

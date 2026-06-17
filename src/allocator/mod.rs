@@ -38,7 +38,7 @@ impl SubnetAllocator {
         let end_u128 = ip_to_u128(&pool_end).0;
 
         let pool_size = end_u128 - start_u128 + 1;
-        let num_words = ((pool_size + 63) / 64) as usize;
+        let num_words = pool_size.div_ceil(64) as usize;
 
         let mut bitmap = vec![0u64; num_words];
 
@@ -192,9 +192,9 @@ impl SubnetAllocator {
         }
 
         // Check subsequent full words
-        for word_idx in (start_word + 1)..num_words {
-            let word = bitmap[word_idx];
+        for (offset, &word) in bitmap[(start_word + 1)..num_words].iter().enumerate() {
             if word != u64::MAX {
+                let word_idx = start_word + 1 + offset;
                 let bit = (!word).trailing_zeros() as usize;
                 return Some(word_idx * 64 + bit);
             }

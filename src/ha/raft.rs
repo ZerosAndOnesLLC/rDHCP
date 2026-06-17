@@ -328,7 +328,7 @@ impl RaftBackend {
 
         // Vote for ourselves
         let _votes = 1u32;
-        let _needed = (self.peers.len() as u32 + 1) / 2 + 1; // majority
+        let _needed = (self.peers.len() as u32).div_ceil(2) + 1; // majority
 
         // Send vote requests to all peers
         for (_peer_id, _peer_addr) in &self.peers {
@@ -442,11 +442,10 @@ impl RaftBackend {
             // Read response
             if let Some(response_msg) = read_message(&mut stream).await? {
                 // Parse response and update state
-                if let HaMessage::Heartbeat { node_id, .. } = response_msg {
-                    if let Ok(rpc_response) = serde_json::from_str::<RaftRpc>(&node_id) {
+                if let HaMessage::Heartbeat { node_id, .. } = response_msg
+                    && let Ok(rpc_response) = serde_json::from_str::<RaftRpc>(&node_id) {
                         Self::handle_rpc_response(&state, peer_id, rpc_response).await;
                     }
-                }
             }
         } else {
             // Plain TCP fallback (development only)
@@ -477,7 +476,6 @@ impl RaftBackend {
                     state.current_term = term;
                     state.role = Role::Follower;
                     state.voted_for = None;
-                    return;
                 }
                 // Vote counting is handled in the election function
             }
@@ -503,11 +501,10 @@ impl RaftBackend {
                     Self::maybe_advance_commit(&mut state);
                 } else {
                     // Decrement next_index and retry
-                    if let Some(ps) = state.peer_state.get_mut(&peer_id) {
-                        if ps.next_index > 1 {
+                    if let Some(ps) = state.peer_state.get_mut(&peer_id)
+                        && ps.next_index > 1 {
                             ps.next_index -= 1;
                         }
-                    }
                 }
             }
             _ => {}
@@ -562,10 +559,9 @@ impl RaftBackend {
 
             let state = state.clone();
             let tls_config = tls_config.clone();
-            let node_id = node_id;
 
             tokio::spawn(async move {
-                let _result = if let Some(tls) = &tls_config {
+                if let Some(tls) = &tls_config {
                     let mut stream = match tls.acceptor.accept(tcp_stream).await {
                         Ok(s) => s,
                         Err(e) => {
@@ -579,11 +575,9 @@ impl RaftBackend {
                             Ok(Some(msg)) => {
                                 if let Some(response) =
                                     Self::handle_rpc_message(&state, node_id, msg).await
-                                {
-                                    if write_message(&mut stream, &response).await.is_err() {
+                                    && write_message(&mut stream, &response).await.is_err() {
                                         break;
                                     }
-                                }
                             }
                             Ok(None) => break,
                             Err(_) => break,
@@ -596,11 +590,9 @@ impl RaftBackend {
                             Ok(Some(msg)) => {
                                 if let Some(response) =
                                     Self::handle_rpc_message(&state, node_id, msg).await
-                                {
-                                    if write_message(&mut stream, &response).await.is_err() {
+                                    && write_message(&mut stream, &response).await.is_err() {
                                         break;
                                     }
-                                }
                             }
                             Ok(None) => break,
                             Err(_) => break,
@@ -917,7 +909,7 @@ fn wrap_rpc(rpc: &RaftRpc) -> HaMessage {
 fn random_election_timeout() -> Duration {
     // 150-300ms range per Raft paper
     let base = 150;
-    let jitter = (epoch_now() % 150) as u64;
+    let jitter = epoch_now() % 150 ;
     Duration::from_millis(base + jitter)
 }
 
