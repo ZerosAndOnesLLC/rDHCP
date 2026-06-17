@@ -53,24 +53,24 @@ impl WalOp {
     }
 }
 
-/// WAL entry binary layout:
-///
-/// ```text
-/// [op: 1] [ip_version: 1] [ip: 4 or 16] [state: 1]
-/// [mac_present: 1] [mac: 0 or 6]
-/// [client_id_len: 2] [client_id: 0..N]
-/// [hostname_len: 2] [hostname: 0..N]
-/// [lease_time: 4] [start_time: 8] [expire_time: 8]
-/// [subnet_len: 2] [subnet: 0..N]
-/// [crc32: 4]
-/// ```
-///
-/// For Remove/StateChange entries, only [op, ip_version, ip, state, crc32] are written.
-///
-/// **Security note**: CRC32 detects accidental corruption only. It provides no
-/// protection against deliberate tampering — an attacker with filesystem write
-/// access can craft entries with valid CRC32 checksums. Protect the WAL directory
-/// with filesystem permissions (the systemd unit restricts writes to /var/lib/rdhcpd).
+// WAL entry binary layout:
+//
+// ```text
+// [op: 1] [ip_version: 1] [ip: 4 or 16] [state: 1]
+// [mac_present: 1] [mac: 0 or 6]
+// [client_id_len: 2] [client_id: 0..N]
+// [hostname_len: 2] [hostname: 0..N]
+// [lease_time: 4] [start_time: 8] [expire_time: 8]
+// [subnet_len: 2] [subnet: 0..N]
+// [crc32: 4]
+// ```
+//
+// For Remove/StateChange entries, only [op, ip_version, ip, state, crc32] are written.
+//
+// **Security note**: CRC32 detects accidental corruption only. It provides no
+// protection against deliberate tampering — an attacker with filesystem write
+// access can craft entries with valid CRC32 checksums. Protect the WAL directory
+// with filesystem permissions (the systemd unit restricts writes to /var/lib/rdhcpd).
 
 /// Maximum allowed length for variable-length WAL fields.
 /// Prevents excessive memory allocation from corrupted/crafted WAL files.

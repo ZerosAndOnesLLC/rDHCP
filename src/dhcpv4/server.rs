@@ -60,7 +60,7 @@ pub enum RelayDecision {
 /// Empty trusted_relays = accept any source (backwards-compatible default).
 fn relay_source_is_trusted(subnet: &SubnetInfo, source: Ipv4Addr) -> bool {
     subnet.trusted_relays.is_empty()
-        || subnet.trusted_relays.iter().any(|ip| *ip == source)
+        || subnet.trusted_relays.contains(&source)
 }
 
 /// Minimum lease time we'll grant (prevents rapid-churn DoS)
@@ -133,6 +133,7 @@ impl SubnetInfo {
 
 impl<H: HaBackend> DhcpV4Server<H> {
     /// Create a new DHCPv4 server with the given configuration, lease store, and HA backend.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<Config>,
         lease_store: LeaseStore,
@@ -341,12 +342,11 @@ impl<H: HaBackend> DhcpV4Server<H> {
             let mac = packet.mac();
 
             // Global rate limiting
-            if let Some(ref global_rl) = self.global_rate_limiter {
-                if !global_rl.check() {
+            if let Some(ref global_rl) = self.global_rate_limiter
+                && !global_rl.check() {
                     debug!(mac = %format_mac(&mac), "dropped by global rate limiter");
                     continue;
                 }
-            }
 
             // Per-client rate limiting
             if !self.rate_limiter.check(&mac) {
@@ -501,8 +501,8 @@ impl<H: HaBackend> DhcpV4Server<H> {
         // existing lease points at a different IP than the reservation,
         // release it so the reserved IP can be offered cleanly.
         if let Some(reserved_ip) = self.find_reservation(&subnet, &mac, packet.client_id()) {
-            if let Some(ref existing) = existing_lease {
-                if existing.ip != IpAddr::V4(reserved_ip) {
+            if let Some(ref existing) = existing_lease
+                && existing.ip != IpAddr::V4(reserved_ip) {
                     info!(
                         mac = %format_mac(&mac),
                         old_ip = %existing.ip,
@@ -515,7 +515,6 @@ impl<H: HaBackend> DhcpV4Server<H> {
                         warn!(error = %e, ip = %existing.ip, "WAL log_remove failed for reservation takeover");
                     }
                 }
-            }
             let options = self.build_offer_options(&subnet);
             let reply =
                 packet.build_reply(MessageType::Offer, reserved_ip, self.server_ip, options);
@@ -528,10 +527,10 @@ impl<H: HaBackend> DhcpV4Server<H> {
         // the pool and not held by another client. Honouring the second
         // bullet keeps a returning client on its prior IP across an expiry
         // window — a hard requirement for "OS reinstall keeps same IP".
-        if let Some(existing) = existing_lease {
-            if let IpAddr::V4(v4) = existing.ip {
-                if let Some(allocator) = self.allocators.get(&*subnet.network) {
-                    if allocator.contains(&existing.ip) {
+        if let Some(existing) = existing_lease
+            && let IpAddr::V4(v4) = existing.ip
+                && let Some(allocator) = self.allocators.get(&*subnet.network)
+                    && allocator.contains(&existing.ip) {
                         let offer_same = if existing.is_active() {
                             // Already ours in the bitmap — nothing to reclaim.
                             true
@@ -560,14 +559,11 @@ impl<H: HaBackend> DhcpV4Server<H> {
                             return Ok(Some(reply));
                         }
                     }
-                }
-            }
-        }
 
         // Check if client is requesting a specific IP
-        if let Some(requested) = packet.requested_ip() {
-            if let Some(allocator) = self.allocators.get(&*subnet.network) {
-                if allocator.contains(&IpAddr::V4(requested))
+        if let Some(requested) = packet.requested_ip()
+            && let Some(allocator) = self.allocators.get(&*subnet.network)
+                && allocator.contains(&IpAddr::V4(requested))
                     && !self.lease_store.is_allocated(&IpAddr::V4(requested))
                     && allocator.allocate_specific(&IpAddr::V4(requested))
                 {
@@ -581,8 +577,6 @@ impl<H: HaBackend> DhcpV4Server<H> {
                     self.record_offer(&subnet, requested, packet).await?;
                     return Ok(Some(reply));
                 }
-            }
-        }
 
         // Allocate from pool
         let allocator = match self.allocators.get(&*subnet.network) {
@@ -602,13 +596,12 @@ impl<H: HaBackend> DhcpV4Server<H> {
         };
 
         // Duplicate IP detection via probe (if enabled)
-        if subnet.config.ip_probe {
-            if !probe::is_available(IpAddr::V4(ip), subnet.config.ip_probe_timeout_ms).await {
+        if subnet.config.ip_probe
+            && !probe::is_available(IpAddr::V4(ip), subnet.config.ip_probe_timeout_ms).await {
                 warn!(ip = %ip, subnet = %subnet.network, "probe detected IP in use, skipping");
                 allocator.release(&IpAddr::V4(ip));
                 return Ok(None);
             }
-        }
 
         // Pool high-water mark alerting
         if self.pool_high_water > 0.0 {
@@ -636,19 +629,17 @@ impl<H: HaBackend> DhcpV4Server<H> {
         packet: &DhcpV4Packet,
     ) -> Result<Option<DhcpV4Packet>, Box<dyn std::error::Error + Send + Sync>> {
         // If server_id is present, this is a response to an Offer
-        if let Some(server_id) = packet.server_id() {
-            if server_id != self.server_ip {
+        if let Some(server_id) = packet.server_id()
+            && server_id != self.server_ip {
                 // Not for us — if we had an offer for this client, release it
                 let mac = packet.mac();
-                if let Some(existing) = self.lease_store.get_by_mac(&mac) {
-                    if existing.state == LeaseState::Offered {
+                if let Some(existing) = self.lease_store.get_by_mac(&mac)
+                    && existing.state == LeaseState::Offered {
                         self.release_ip(&existing.ip);
                         self.lease_store.remove(&existing.ip);
                     }
-                }
                 return Ok(None);
             }
-        }
 
         // Determine the IP the client wants
         let requested_ip = if let Some(ip) = packet.requested_ip() {
@@ -686,13 +677,12 @@ impl<H: HaBackend> DhcpV4Server<H> {
         // IP, NAK so the client falls back to INIT and re-Discovers. Without
         // this, an INIT-REBOOT request carrying a stale pool IP (e.g. after
         // unplug/replug) silently keeps the wrong address forever.
-        if let Some(reserved_ip) = self.find_reservation(&subnet, &mac, packet.client_id()) {
-            if reserved_ip != requested_ip {
+        if let Some(reserved_ip) = self.find_reservation(&subnet, &mac, packet.client_id())
+            && reserved_ip != requested_ip {
                 return Ok(Some(
                     self.build_nak(packet, "MAC has reservation for different IP"),
                 ));
             }
-        }
 
         // Cross-subnet MAC migration (issue #63): clean up any stale lease
         // this MAC holds in a different subnet before committing the new one,
@@ -703,20 +693,18 @@ impl<H: HaBackend> DhcpV4Server<H> {
         // Check if there's an existing lease
         if let Some(existing) = self.lease_store.get(&ip_addr) {
             // Verify the lease belongs to this client
-            if let Some(existing_mac) = existing.mac {
-                if existing_mac != mac {
+            if let Some(existing_mac) = existing.mac
+                && existing_mac != mac {
                     return Ok(Some(
                         self.build_nak(packet, "IP assigned to different client"),
                     ));
                 }
-            }
         } else {
             // No existing lease — check if this is a reservation or if we need to allocate
-            if let Some(allocator) = self.allocators.get(&*subnet.network) {
-                if !allocator.is_allocated(&ip_addr) {
+            if let Some(allocator) = self.allocators.get(&*subnet.network)
+                && !allocator.is_allocated(&ip_addr) {
                     allocator.allocate_specific(&ip_addr);
                 }
-            }
         }
 
         // MAC ACL check on REQUEST too (client may have switched subnets)
@@ -732,16 +720,14 @@ impl<H: HaBackend> DhcpV4Server<H> {
 
         // Enforce lease time bounds: respect client request within [MIN, max]
         let mut lease_time = subnet.config.lease_time;
-        if let Some(requested_lt) = packet.requested_lease_time() {
-            if requested_lt >= MIN_LEASE_TIME && requested_lt < lease_time {
+        if let Some(requested_lt) = packet.requested_lease_time()
+            && requested_lt >= MIN_LEASE_TIME && requested_lt < lease_time {
                 lease_time = requested_lt;
             }
-        }
-        if let Some(max_lt) = subnet.config.max_lease_time {
-            if max_lt > 0 && lease_time > max_lt {
+        if let Some(max_lt) = subnet.config.max_lease_time
+            && max_lt > 0 && lease_time > max_lt {
                 lease_time = max_lt;
             }
-        }
         // Floor: never grant less than MIN_LEASE_TIME
         lease_time = lease_time.max(MIN_LEASE_TIME);
 
@@ -749,7 +735,7 @@ impl<H: HaBackend> DhcpV4Server<H> {
             ip: ip_addr,
             mac: Some(mac),
             client_id: packet.client_id().map(|c| c.to_vec()),
-            hostname: packet.hostname().map(|s| Arc::from(s)),
+            hostname: packet.hostname().map(Arc::from),
             lease_time,
             state: LeaseState::Bound,
             start_time: now_epoch,
@@ -784,9 +770,9 @@ impl<H: HaBackend> DhcpV4Server<H> {
     ) -> Result<Option<DhcpV4Packet>, Box<dyn std::error::Error + Send + Sync>> {
         let ip = IpAddr::V4(packet.ciaddr);
 
-        if let Some(existing) = self.lease_store.get(&ip) {
-            if let Some(existing_mac) = existing.mac {
-                if existing_mac == packet.mac() {
+        if let Some(existing) = self.lease_store.get(&ip)
+            && let Some(existing_mac) = existing.mac
+                && existing_mac == packet.mac() {
                     self.ha.release_lease(&ip).await?;
                     self.wal.log_remove(&ip).await?;
                     self.lease_store.remove(&ip);
@@ -798,8 +784,6 @@ impl<H: HaBackend> DhcpV4Server<H> {
                         "lease released"
                     );
                 }
-            }
-        }
 
         // No reply for Release
         Ok(None)
@@ -881,8 +865,8 @@ impl<H: HaBackend> DhcpV4Server<H> {
     /// Falls through if a match isn't found at any level.
     fn select_subnet(&self, packet: &DhcpV4Packet) -> Option<SubnetInfo> {
         // Try giaddr first (relayed packets)
-        if packet.is_relayed() {
-            if let Some(s) = self.subnets.iter().find(|s| {
+        if packet.is_relayed()
+            && let Some(s) = self.subnets.iter().find(|s| {
                 ip_in_subnet(
                     &IpAddr::V4(packet.giaddr),
                     &IpAddr::V4(s.network_addr),
@@ -892,11 +876,10 @@ impl<H: HaBackend> DhcpV4Server<H> {
                 return Some(s.clone());
             }
             // giaddr didn't match any subnet — fall through
-        }
 
         // Try ciaddr (renew/rebind/inform)
-        if !packet.ciaddr.is_unspecified() {
-            if let Some(s) = self.subnets.iter().find(|s| {
+        if !packet.ciaddr.is_unspecified()
+            && let Some(s) = self.subnets.iter().find(|s| {
                 ip_in_subnet(
                     &IpAddr::V4(packet.ciaddr),
                     &IpAddr::V4(s.network_addr),
@@ -905,7 +888,6 @@ impl<H: HaBackend> DhcpV4Server<H> {
             }) {
                 return Some(s.clone());
             }
-        }
 
         // Fall back to server IP (direct connected / default subnet)
         self.subnets.iter().find(|s| {
@@ -944,7 +926,7 @@ impl<H: HaBackend> DhcpV4Server<H> {
             ip: IpAddr::V4(ip),
             mac: Some(packet.mac()),
             client_id: packet.client_id().map(|c| c.to_vec()),
-            hostname: packet.hostname().map(|s| Arc::from(s)),
+            hostname: packet.hostname().map(Arc::from),
             lease_time: OFFER_HOLD_TIME as u32,
             state: LeaseState::Offered,
             start_time: now_epoch,
@@ -973,11 +955,10 @@ impl<H: HaBackend> DhcpV4Server<H> {
         opts.push(DhcpOption::RenewalTime(t1));
         opts.push(DhcpOption::RebindingTime(t2));
 
-        if let Some(ref router) = subnet.config.router {
-            if let Ok(r) = router.parse::<Ipv4Addr>() {
+        if let Some(ref router) = subnet.config.router
+            && let Ok(r) = router.parse::<Ipv4Addr>() {
                 opts.push(DhcpOption::Router(vec![r]));
             }
-        }
 
         let dns_addrs: Vec<Ipv4Addr> = subnet
             .config
@@ -1029,11 +1010,10 @@ impl<H: HaBackend> DhcpV4Server<H> {
         opts.push(DhcpOption::ServerIdentifier(self.server_ip));
         opts.push(DhcpOption::SubnetMask(prefix_to_mask(subnet.prefix_len)));
 
-        if let Some(ref router) = subnet.config.router {
-            if let Ok(r) = router.parse::<Ipv4Addr>() {
+        if let Some(ref router) = subnet.config.router
+            && let Ok(r) = router.parse::<Ipv4Addr>() {
                 opts.push(DhcpOption::Router(vec![r]));
             }
-        }
 
         let dns_addrs: Vec<Ipv4Addr> = subnet
             .config
@@ -1240,20 +1220,16 @@ pub(crate) fn find_reservation_for(
     client_id: Option<&[u8]>,
 ) -> Option<Ipv4Addr> {
     for res in reservations {
-        if let Some(ref res_mac) = res.mac {
-            if let Ok(parsed) = crate::config::validation::parse_mac(res_mac) {
-                if &parsed == mac {
+        if let Some(ref res_mac) = res.mac
+            && let Ok(parsed) = crate::config::validation::parse_mac(res_mac)
+                && &parsed == mac {
                     return res.ip.parse().ok();
                 }
-            }
-        }
-        if let (Some(res_cid), Some(pkt_cid)) = (&res.client_id, client_id) {
-            if let Some(parsed) = decode_hex(res_cid) {
-                if parsed == pkt_cid {
+        if let (Some(res_cid), Some(pkt_cid)) = (&res.client_id, client_id)
+            && let Some(parsed) = decode_hex(res_cid)
+                && parsed == pkt_cid {
                     return res.ip.parse().ok();
                 }
-            }
-        }
     }
     None
 }
@@ -1262,7 +1238,7 @@ pub(crate) fn find_reservation_for(
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
     // Strip optional separators
     let clean: String = s.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-    if clean.len() % 2 != 0 {
+    if !clean.len().is_multiple_of(2) {
         return None;
     }
     let mut bytes = Vec::with_capacity(clean.len() / 2);

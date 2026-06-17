@@ -30,6 +30,12 @@ struct LeaseStoreInner {
     active_count: AtomicUsize,
 }
 
+impl Default for LeaseStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LeaseStore {
     /// Create an empty lease store with no leases.
     pub fn new() -> Self {
@@ -52,16 +58,14 @@ impl LeaseStore {
         // Clean up old secondary indexes if IP already existed with different identifiers
         if let Some(old) = self.inner.leases.get(&ip) {
             was_active = old.is_active();
-            if let Some(old_mac) = old.mac {
-                if lease.mac != Some(old_mac) {
+            if let Some(old_mac) = old.mac
+                && lease.mac != Some(old_mac) {
                     self.inner.mac_index.remove(&old_mac);
                 }
-            }
-            if let Some(ref old_cid) = old.client_id {
-                if lease.client_id.as_ref() != Some(old_cid) {
+            if let Some(ref old_cid) = old.client_id
+                && lease.client_id.as_ref() != Some(old_cid) {
                     self.inner.client_id_index.remove(old_cid);
                 }
-            }
         } else {
             was_active = false;
         }
@@ -86,7 +90,7 @@ impl LeaseStore {
         // Add to expiry queue
         if is_active {
             let mut eq = self.inner.expiry_queue.lock().unwrap();
-            eq.entry(lease.expire_time).or_insert_with(Vec::new).push(ip);
+            eq.entry(lease.expire_time).or_default().push(ip);
         }
 
         self.inner.leases.insert(ip, lease);
@@ -171,11 +175,10 @@ impl LeaseStore {
             for ip in ips {
                 // Verify the lease is still active and actually expired
                 // (it may have been renewed, changing expire_time)
-                if let Some(lease) = self.inner.leases.get(&ip) {
-                    if lease.is_active() && lease.is_expired_at(now_epoch) {
+                if let Some(lease) = self.inner.leases.get(&ip)
+                    && lease.is_active() && lease.is_expired_at(now_epoch) {
                         expired.push(ip);
                     }
-                }
             }
         }
 

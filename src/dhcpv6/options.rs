@@ -314,7 +314,7 @@ impl Dhcpv6Option {
                     })
                 }
                 code::ORO => {
-                    if opt_len % 2 != 0 {
+                    if !opt_len.is_multiple_of(2) {
                         return Err(Dhcpv6PacketError::MalformedOption(pos));
                     }
                     let codes = opt_data
@@ -350,7 +350,7 @@ impl Dhcpv6Option {
                 }
                 code::RAPID_COMMIT => Dhcpv6Option::RapidCommit,
                 code::DNS_SERVERS => {
-                    if opt_len % 16 != 0 {
+                    if !opt_len.is_multiple_of(16) {
                         return Err(Dhcpv6PacketError::MalformedOption(pos));
                     }
                     let addrs = opt_data

@@ -9,7 +9,7 @@ use super::{Config, ConfigError};
 /// Rejects odd-length strings and non-hex characters.
 fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
     let s = s.trim();
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(format!(
             "hex string must have even length, got {}",
             s.len()
@@ -153,14 +153,13 @@ fn validate_subnets(config: &Config) -> Result<(), ConfigError> {
                         i
                     )));
                 }
-                if let Some(dl) = subnet.delegated_length {
-                    if dl <= prefix_len || dl > 128 {
+                if let Some(dl) = subnet.delegated_length
+                    && (dl <= prefix_len || dl > 128) {
                         return Err(ConfigError::Validation(format!(
                             "subnet[{}]: delegated_length {} must be > prefix_len {} and <= 128",
                             i, dl, prefix_len
                         )));
                     }
-                }
             }
             other => {
                 return Err(ConfigError::Validation(format!(

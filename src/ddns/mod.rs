@@ -286,6 +286,7 @@ async fn ddns_worker(config: Arc<DdnsConfig>, mut rx: mpsc::Receiver<DdnsRequest
 }
 
 /// Build a DNS UPDATE message (RFC 2136)
+#[allow(clippy::too_many_arguments)]
 fn build_update(
     zone: &str,
     name: &str,
