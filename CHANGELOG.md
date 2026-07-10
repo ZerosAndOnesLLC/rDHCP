@@ -5,6 +5,18 @@ All notable changes to rDHCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-07-10
+
+### Added
+- `[global] recv_buffer_bytes` — configurable DHCPv4/v6 receive socket buffer (`SO_RCVBUF`, default 4 MiB). Lets bursts such as boot storms (many clients powering on at once) queue in the kernel instead of overflowing the small default socket buffer and dropping requests. The granted size is logged on startup, and a warning is emitted when the kernel caps it below the request (raise `net.core.rmem_max` to grant more).
+
+### Fixed
+- **DHCPv4: replies no longer contend for inbound traffic in the receive `SO_REUSEPORT` group.** On non-FreeBSD the server used a dedicated `0.0.0.0:67` send socket, which joined the same `SO_REUSEPORT` group as the receive socket(s). The kernel's flow hash could then steer inbound broadcast requests to the send socket — which the server never reads — silently dropping them (non-deterministically, chosen per boot). Replies now come from each worker's own receive socket (correct source port 67, broadcast-capable); FreeBSD keeps its BPF/UDP sender.
+
+### Changed
+- Refreshed all dependencies to their latest compatible releases (`cargo update` / `cargo upgrade`).
+- Formatted the entire codebase with `cargo fmt` and resolved `clippy` lints. The `dhcpv4_lease_stickiness` integration test now declares `required-features = ["test-helpers"]` so a bare `cargo test` compiles (matching `dhcpv4_relay_gates`).
+
 ## [0.13.2] - 2026-04-19
 
 ### Fixed
