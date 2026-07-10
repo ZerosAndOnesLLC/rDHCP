@@ -191,6 +191,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Number of receive workers per protocol
     let worker_count = config.global.workers;
 
+    // Receive socket buffer size (SO_RCVBUF) — absorbs boot storms without drops
+    let recv_buffer_bytes = config.global.recv_buffer_bytes;
+
     // DHCPv4 port — default 67
     // RDHCPD_V4_PORT: override for testing/benchmarking only (not for production)
     let dhcpv4_port: u16 = std::env::var("RDHCPD_V4_PORT")
@@ -209,8 +212,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // On FreeBSD we also capture the interface name and MAC address so
         // we can open a BPF device for raw-frame replies.
         // -----------------------------------------------------------------
-        #[cfg(not(target_os = "freebsd"))]
-        let send_bind_ip = Ipv4Addr::UNSPECIFIED;
         #[cfg(target_os = "freebsd")]
         let mut send_bind_ip = Ipv4Addr::UNSPECIFIED;
         #[cfg(target_os = "freebsd")]
@@ -331,10 +332,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
-        #[cfg(not(target_os = "freebsd"))]
-        let sender: Arc<DhcpSender> = Arc::new(DhcpSender::Udp(
-            build_udp_send_socket(send_bind_ip, dhcpv4_port)?,
-        ));
+        // On non-FreeBSD each worker replies from its own receive socket (see the
+        // worker loop below), so there is no separate shared send socket. A dedicated
+        // 0.0.0.0:67 send socket would join the recv SO_REUSEPORT group and could be
+        // handed inbound broadcast requests that it never reads — silently dropping
+        // them depending on the kernel's reuseport hash.
 
         // -----------------------------------------------------------------
         // Spawn receive workers
@@ -351,13 +353,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut sockets: Vec<Arc<UdpSocket>> = Vec::new();
             #[cfg(target_os = "freebsd")]
             {
-                sockets.push(build_recv_socket(&bcast_bind, true)?);
-                sockets.push(build_recv_socket(&any_bind, false)?);
+                sockets.push(build_recv_socket(&bcast_bind, true, recv_buffer_bytes)?);
+                sockets.push(build_recv_socket(&any_bind, false, recv_buffer_bytes)?);
             }
             #[cfg(not(target_os = "freebsd"))]
             {
                 let _ = &bcast_bind; // unused on non-FreeBSD
-                sockets.push(build_recv_socket(&any_bind, false)?);
+                sockets.push(build_recv_socket(&any_bind, false, recv_buffer_bytes)?);
             }
 
             let dhcpv4_server = Arc::new(DhcpV4Server::new(
@@ -376,7 +378,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             for (sock_idx, recv_socket) in sockets.into_iter().enumerate() {
                 let server = dhcpv4_server.clone();
+                // FreeBSD replies via the shared BPF/UDP sender; elsewhere reply from
+                // this worker's own recv socket (source port 67, broadcast-capable) so
+                // no extra socket competes for inbound traffic in the SO_REUSEPORT group.
+                #[cfg(target_os = "freebsd")]
                 let worker_sender = sender.clone();
+                #[cfg(not(target_os = "freebsd"))]
+                let worker_sender = Arc::new(DhcpSender::Udp(recv_socket.clone()));
                 dhcpv4_handles.push(tokio::spawn(async move {
                     if let Err(e) = server.run(recv_socket, worker_sender).await {
                         error!(error = %e, worker = worker_id, sock_idx, "DHCPv4 server error");
@@ -405,6 +413,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|e| format!("failed to create DHCPv6 socket: {}", e))?;
             sock.set_reuse_port(true)?;
             sock.set_nonblocking(true)?;
+            apply_recv_buffer(&sock, recv_buffer_bytes, "[::]:547");
             sock.bind(&"[::]:547".parse::<std::net::SocketAddr>().unwrap().into())
                 .map_err(|e| format!("failed to bind DHCPv6 port 547: {} (try running as root)", e))?;
             let dhcpv6_socket = Arc::new(UdpSocket::from_std(sock.into())?);
@@ -486,6 +495,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Enlarge a socket's receive buffer (`SO_RCVBUF`) so bursts — e.g. a boot storm
+/// where many clients power on at once — queue in the kernel instead of being
+/// dropped before a worker can read them. The effective size is capped by the
+/// kernel's `net.core.rmem_max`; if the kernel grants far less than requested we
+/// warn so the operator can raise that sysctl. `bytes == 0` leaves the OS default.
+fn apply_recv_buffer(sock: &socket2::Socket, bytes: usize, label: &str) {
+    if bytes == 0 {
+        return;
+    }
+    if let Err(e) = sock.set_recv_buffer_size(bytes) {
+        warn!(error = %e, socket = label, "failed to set SO_RCVBUF");
+        return;
+    }
+    match sock.recv_buffer_size() {
+        // Linux reports back ~2x the requested value; only warn on a clear shortfall.
+        Ok(actual) if actual < bytes => warn!(
+            socket = label,
+            requested = bytes,
+            granted = actual,
+            "SO_RCVBUF capped below requested — raise net.core.rmem_max to avoid receive drops under load"
+        ),
+        Ok(actual) => info!(
+            socket = label,
+            requested = bytes,
+            granted = actual,
+            "receive buffer enlarged"
+        ),
+        Err(e) => warn!(error = %e, socket = label, "could not read back SO_RCVBUF"),
+    }
+}
+
 /// Create a UDP receive socket for DHCPv4.
 ///
 /// On FreeBSD, `freebsd_bindany` enables IP_BINDANY so the socket can bind to
@@ -494,6 +534,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn build_recv_socket(
     bind_addr: &str,
     freebsd_bindany: bool,
+    recv_buffer_bytes: usize,
 ) -> Result<Arc<UdpSocket>, Box<dyn std::error::Error>> {
     let sock = socket2::Socket::new(
         socket2::Domain::IPV4,
@@ -504,6 +545,7 @@ fn build_recv_socket(
     sock.set_reuse_port(true)?;
     sock.set_broadcast(true)?;
     sock.set_nonblocking(true)?;
+    apply_recv_buffer(&sock, recv_buffer_bytes, bind_addr);
 
     #[cfg(target_os = "freebsd")]
     if freebsd_bindany {
@@ -529,7 +571,9 @@ fn build_recv_socket(
     Ok(Arc::new(UdpSocket::from_std(sock.into())?))
 }
 
-/// Create a UDP send socket for DHCPv4 replies (fallback when BPF is unavailable).
+/// Create a UDP send socket for DHCPv4 replies (FreeBSD BPF fallback only; other
+/// platforms reply directly from the per-worker receive socket).
+#[cfg(target_os = "freebsd")]
 fn build_udp_send_socket(
     bind_ip: Ipv4Addr,
     port: u16,

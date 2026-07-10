@@ -38,6 +38,12 @@ Key design choices behind these numbers:
 - **SO_REUSEPORT** with multiple receive workers across CPU cores
 - **Zero-allocation hot path** — `Arc<str>` for lease fields, stack buffers for packets, `MacDisplay` writer for logging
 - **Write-ahead log** with CRC32 checksums for durability without database overhead
+- **Enlarged receive buffer** (`recv_buffer_bytes`, `SO_RCVBUF`) so boot storms queue in the kernel instead of being dropped
+
+> **Tuning for very high loads:** `SO_RCVBUF` is capped by the kernel's `net.core.rmem_max`
+> (often ~208 KB by default). To let `recv_buffer_bytes` take full effect under heavy bursts,
+> raise it, e.g. `sysctl -w net.core.rmem_max=67108864`. rDHCP logs the granted buffer size on
+> startup and warns if the kernel capped it below the requested value.
 
 ## Features
 
@@ -460,6 +466,7 @@ sudo ./bench/run.sh
 | `log_format` | string | `"text"` | Log format: `text` or `json` |
 | `lease_db` | string | `"/var/lib/rdhcpd/leases"` | Directory for WAL and snapshots |
 | `workers` | int | `1` | Receive workers per protocol (DHCPv4/v6) |
+| `recv_buffer_bytes` | int | `4194304` | Receive socket buffer (`SO_RCVBUF`, 4 MiB); absorbs boot storms. Capped by `net.core.rmem_max` — raise that sysctl to grant more; `0` = OS default |
 | `rate_limit_burst` | int | `10` | Per-client max burst (packets) |
 | `rate_limit_pps` | float | `5.0` | Per-client sustained rate (packets/sec) |
 | `global_rate_limit_pps` | float | `0.0` | Global rate limit (0 = disabled) |

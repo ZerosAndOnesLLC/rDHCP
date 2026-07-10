@@ -79,6 +79,7 @@ fn make_global(accept_relayed: bool) -> GlobalConfig {
         accept_relayed,
         relay_rate_limit_burst: 100,
         relay_rate_limit_pps: 100.0,
+        recv_buffer_bytes: 0,
     }
 }
 
