@@ -12,6 +12,10 @@ log_level = "info"                # trace, debug, info, warn, error
 log_format = "text"               # "text" or "json"
 lease_db = "/var/lib/rdhcpd/leases"
 workers = 1                       # receive workers per protocol (DHCPv4/v6)
+recv_buffer_bytes = 4194304       # SO_RCVBUF per receive socket (4 MiB); lets bursts
+                                  # (boot storms) queue in the kernel instead of dropping.
+                                  # Capped by net.core.rmem_max — raise that sysctl to grant
+                                  # more (e.g. sysctl -w net.core.rmem_max=67108864). 0 = OS default.
 
 # --- Rate Limiting & Security ---
 rate_limit_burst = 10             # per-client burst size (packets)

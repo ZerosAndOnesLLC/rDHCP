@@ -1,6 +1,4 @@
-
 use serde::{Deserialize, Serialize};
-
 
 /// HA wire protocol messages exchanged between peers.
 /// Framed as: [4-byte big-endian length][JSON payload]

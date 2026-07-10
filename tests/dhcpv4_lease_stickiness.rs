@@ -12,7 +12,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use rdhcpd::allocator::{build_allocators, SubnetAllocator};
+use rdhcpd::allocator::{SubnetAllocator, build_allocators};
 use rdhcpd::config::{Config, GlobalConfig, HaConfig, SubnetConfig};
 use rdhcpd::dhcpv4::options::{DhcpOption, MessageType};
 use rdhcpd::dhcpv4::packet::DhcpV4Packet;
@@ -84,6 +84,7 @@ fn make_global() -> GlobalConfig {
         accept_relayed: true,
         relay_rate_limit_burst: 100,
         relay_rate_limit_pps: 100.0,
+        recv_buffer_bytes: 0,
     }
 }
 
@@ -163,9 +164,10 @@ fn seed_lease(
         subnet: Arc::from(subnet),
     };
     if matches!(state, LeaseState::Offered | LeaseState::Bound)
-        && let Some(alloc) = allocators.get(subnet) {
-            alloc.allocate_specific(&IpAddr::V4(ip));
-        }
+        && let Some(alloc) = allocators.get(subnet)
+    {
+        alloc.allocate_specific(&IpAddr::V4(ip));
+    }
     lease_store.upsert(lease);
 }
 

@@ -42,10 +42,7 @@ pub fn process_expired_once(
 
 /// Background task that drains the expiry queue once per second and releases
 /// expired IPs back to their subnet allocators (issue #68).
-pub async fn run_expiry_task(
-    store: LeaseStore,
-    allocators: Arc<HashMap<String, SubnetAllocator>>,
-) {
+pub async fn run_expiry_task(store: LeaseStore, allocators: Arc<HashMap<String, SubnetAllocator>>) {
     let mut interval = tokio::time::interval(Duration::from_secs(1));
 
     loop {

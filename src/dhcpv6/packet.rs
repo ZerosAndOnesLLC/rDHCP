@@ -112,8 +112,8 @@ impl Dhcpv6Message {
             return Err(Dhcpv6PacketError::TooShort(data.len()));
         }
 
-        let msg_type =
-            Dhcpv6MessageType::from_u8(data[0]).ok_or(Dhcpv6PacketError::BadMessageType(data[0]))?;
+        let msg_type = Dhcpv6MessageType::from_u8(data[0])
+            .ok_or(Dhcpv6PacketError::BadMessageType(data[0]))?;
 
         if msg_type.is_relay() {
             return Err(Dhcpv6PacketError::BadMessageType(data[0]));
@@ -178,8 +178,8 @@ impl Dhcpv6RelayMessage {
             return Err(Dhcpv6PacketError::TooShort(data.len()));
         }
 
-        let msg_type =
-            Dhcpv6MessageType::from_u8(data[0]).ok_or(Dhcpv6PacketError::BadMessageType(data[0]))?;
+        let msg_type = Dhcpv6MessageType::from_u8(data[0])
+            .ok_or(Dhcpv6PacketError::BadMessageType(data[0]))?;
 
         if !msg_type.is_relay() {
             return Err(Dhcpv6PacketError::BadMessageType(data[0]));

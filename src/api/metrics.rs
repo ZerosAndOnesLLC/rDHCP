@@ -106,14 +106,18 @@ pub async fn metrics_handler<H: HaBackend>(
     use std::sync::atomic::Ordering;
     let s = &state.dhcpv4_stats;
 
-    output.push_str("# HELP rdhcpd_dhcpv4_relayed_received_total DHCPv4 packets received with giaddr != 0\n");
+    output.push_str(
+        "# HELP rdhcpd_dhcpv4_relayed_received_total DHCPv4 packets received with giaddr != 0\n",
+    );
     output.push_str("# TYPE rdhcpd_dhcpv4_relayed_received_total counter\n");
     output.push_str(&format!(
         "rdhcpd_dhcpv4_relayed_received_total {}\n",
         s.relayed_received.load(Ordering::Relaxed)
     ));
 
-    output.push_str("# HELP rdhcpd_dhcpv4_relayed_dropped_total DHCPv4 relayed packets dropped, by reason\n");
+    output.push_str(
+        "# HELP rdhcpd_dhcpv4_relayed_dropped_total DHCPv4 relayed packets dropped, by reason\n",
+    );
     output.push_str("# TYPE rdhcpd_dhcpv4_relayed_dropped_total counter\n");
     output.push_str(&format!(
         "rdhcpd_dhcpv4_relayed_dropped_total{{reason=\"accept_relayed_disabled\"}} {}\n",
@@ -132,7 +136,10 @@ pub async fn metrics_handler<H: HaBackend>(
         s.relayed_dropped_rate_limit.load(Ordering::Relaxed)
     ));
 
-    ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], output)
+    (
+        [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        output,
+    )
 }
 
 #[cfg(test)]
@@ -145,7 +152,8 @@ mod tests {
     fn metrics_strings_are_emitted_for_relay_counters() {
         let s = Arc::new(DhcpV4Stats::new());
         s.relayed_received.fetch_add(7, Ordering::Relaxed);
-        s.relayed_dropped_untrusted_relay.fetch_add(2, Ordering::Relaxed);
+        s.relayed_dropped_untrusted_relay
+            .fetch_add(2, Ordering::Relaxed);
 
         let mut output = String::new();
         output.push_str(&format!(
@@ -158,6 +166,8 @@ mod tests {
         ));
 
         assert!(output.contains("rdhcpd_dhcpv4_relayed_received_total 7"));
-        assert!(output.contains("rdhcpd_dhcpv4_relayed_dropped_total{reason=\"untrusted_relay\"} 2"));
+        assert!(
+            output.contains("rdhcpd_dhcpv4_relayed_dropped_total{reason=\"untrusted_relay\"} 2")
+        );
     }
 }

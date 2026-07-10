@@ -109,7 +109,11 @@ impl BpfSender {
             "BPF sender ready"
         );
 
-        Ok(Self { fd, src_mac, src_ip })
+        Ok(Self {
+            fd,
+            src_mac,
+            src_ip,
+        })
     }
 
     /// Send a serialized DHCP payload as a raw Ethernet frame.
@@ -247,9 +251,7 @@ impl BpfSender {
     /// `BIOCSHDRCMPLT` — tell BPF we supply the full Ethernet header.
     fn set_hdrcmplt(fd: i32) -> std::io::Result<()> {
         let enable: libc::c_uint = 1;
-        let ret = unsafe {
-            libc::ioctl(fd, BIOCSHDRCMPLT, &enable as *const libc::c_uint)
-        };
+        let ret = unsafe { libc::ioctl(fd, BIOCSHDRCMPLT, &enable as *const libc::c_uint) };
         if ret < 0 {
             return Err(std::io::Error::last_os_error());
         }

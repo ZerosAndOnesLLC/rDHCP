@@ -1,8 +1,8 @@
 //! Per-client rate limiting, global rate limiting, MAC-based access control,
 //! and rogue client detection.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
@@ -92,12 +92,13 @@ impl RateLimiter {
         }
 
         // New client — allocate only on first sight
-        let mut entry = self.buckets.entry(client_id.to_vec()).or_insert_with(|| {
-            TokenBucket {
+        let mut entry = self
+            .buckets
+            .entry(client_id.to_vec())
+            .or_insert_with(|| TokenBucket {
                 tokens: self.max_tokens as f64,
                 last_refill: now,
-            }
-        });
+            });
 
         let bucket = entry.value_mut();
 

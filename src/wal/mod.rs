@@ -213,10 +213,7 @@ impl Wal {
         fs::rename(&tmp_path, &self.path).await?;
 
         // Reopen the writer pointing at the new file (append mode)
-        let new_file = OpenOptions::new()
-            .append(true)
-            .open(&self.path)
-            .await?;
+        let new_file = OpenOptions::new().append(true).open(&self.path).await?;
         *writer = BufWriter::new(new_file);
 
         Ok(count)
@@ -312,9 +309,7 @@ impl Wal {
         buf
     }
 
-    async fn read_entry(
-        reader: &mut BufReader<File>,
-    ) -> Result<Option<WalEntry>, WalError> {
+    async fn read_entry(reader: &mut BufReader<File>) -> Result<Option<WalEntry>, WalError> {
         // Read op byte
         let op_byte = match read_u8(reader).await {
             Ok(v) => v,
@@ -344,7 +339,7 @@ impl Wal {
                 return Err(WalError::Corrupt {
                     offset: 0,
                     reason: format!("invalid ip version: {}", ip_version),
-                })
+                });
             }
         };
 
@@ -418,7 +413,10 @@ impl Wal {
                 if cid_len > MAX_CLIENT_ID_LEN {
                     return Err(WalError::Corrupt {
                         offset: 0,
-                        reason: format!("client_id length {} exceeds max {}", cid_len, MAX_CLIENT_ID_LEN),
+                        reason: format!(
+                            "client_id length {} exceeds max {}",
+                            cid_len, MAX_CLIENT_ID_LEN
+                        ),
                     });
                 }
                 let client_id = if cid_len > 0 {
@@ -437,7 +435,10 @@ impl Wal {
                 if hostname_len > MAX_HOSTNAME_LEN {
                     return Err(WalError::Corrupt {
                         offset: 0,
-                        reason: format!("hostname length {} exceeds max {}", hostname_len, MAX_HOSTNAME_LEN),
+                        reason: format!(
+                            "hostname length {} exceeds max {}",
+                            hostname_len, MAX_HOSTNAME_LEN
+                        ),
                     });
                 }
                 let hostname = if hostname_len > 0 {
@@ -478,7 +479,10 @@ impl Wal {
                 if subnet_len > MAX_SUBNET_LEN {
                     return Err(WalError::Corrupt {
                         offset: 0,
-                        reason: format!("subnet length {} exceeds max {}", subnet_len, MAX_SUBNET_LEN),
+                        reason: format!(
+                            "subnet length {} exceeds max {}",
+                            subnet_len, MAX_SUBNET_LEN
+                        ),
                     });
                 }
                 let mut subnet_buf = vec![0u8; subnet_len];

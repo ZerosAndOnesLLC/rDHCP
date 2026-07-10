@@ -64,6 +64,13 @@ pub struct GlobalConfig {
     /// Per-relay-agent-source rate limit: sustained packets per second.
     #[serde(default = "default_relay_rate_limit_pps")]
     pub relay_rate_limit_pps: f64,
+    /// DHCPv4/v6 receive socket buffer size (SO_RCVBUF) in bytes. A larger
+    /// buffer absorbs boot storms (many clients powering on at once) so bursts
+    /// queue in the kernel instead of being dropped before a worker reads them.
+    /// The effective size is capped by the kernel's `net.core.rmem_max`; raise
+    /// that sysctl to grant more. Set to 0 to leave the OS default untouched.
+    #[serde(default = "default_recv_buffer_bytes")]
+    pub recv_buffer_bytes: usize,
 }
 
 /// REST API server configuration.
@@ -398,6 +405,10 @@ fn default_accept_relayed() -> bool {
 
 fn default_relay_rate_limit_burst() -> u32 {
     200
+}
+
+fn default_recv_buffer_bytes() -> usize {
+    4 * 1024 * 1024 // 4 MiB
 }
 
 fn default_relay_rate_limit_pps() -> f64 {

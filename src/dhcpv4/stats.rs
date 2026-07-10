@@ -22,7 +22,6 @@ impl DhcpV4Stats {
     pub fn new() -> Self {
         Self::default()
     }
-
 }
 
 #[cfg(test)]

@@ -63,7 +63,14 @@ impl DdnsClient {
         let fqdn = self.make_fqdn(hostname);
         let ttl = self.config.ttl;
 
-        let _ = self.tx.send(DdnsRequest::Add { ip, hostname: fqdn, ttl }).await;
+        let _ = self
+            .tx
+            .send(DdnsRequest::Add {
+                ip,
+                hostname: fqdn,
+                ttl,
+            })
+            .await;
     }
 
     /// Queue a remove (forward + reverse) DNS update
@@ -73,7 +80,10 @@ impl DdnsClient {
         }
 
         let fqdn = self.make_fqdn(hostname);
-        let _ = self.tx.send(DdnsRequest::Remove { ip, hostname: fqdn }).await;
+        let _ = self
+            .tx
+            .send(DdnsRequest::Remove { ip, hostname: fqdn })
+            .await;
     }
 
     fn make_fqdn(&self, hostname: &str) -> String {
@@ -135,10 +145,7 @@ async fn ddns_worker(config: Arc<DdnsConfig>, mut rx: mpsc::Receiver<DdnsRequest
 
     let tsig_key = config.tsig_key.as_deref().and_then(|key_name| {
         let secret = config.tsig_secret.as_deref()?;
-        let algorithm = config
-            .tsig_algorithm
-            .as_deref()
-            .unwrap_or("hmac-sha256");
+        let algorithm = config.tsig_algorithm.as_deref().unwrap_or("hmac-sha256");
         Some(tsig::TsigKey {
             name: key_name.to_string(),
             algorithm: algorithm.to_string(),
@@ -382,4 +389,3 @@ fn ip_to_rdata(ip: &IpAddr) -> Vec<u8> {
         IpAddr::V6(v6) => v6.octets().to_vec(),
     }
 }
-
