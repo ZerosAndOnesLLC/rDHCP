@@ -6,9 +6,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::UdpSocket;
 use tracing::{debug, error, info, warn};
 
-use super::options::{
-    Dhcpv6Option, IaAddr, IaNa, IaPd, IaPrefix, StatusCode,
-};
+use super::options::{Dhcpv6Option, IaAddr, IaNa, IaPd, IaPrefix, StatusCode};
 use super::packet::{Dhcpv6Message, Dhcpv6MessageType, Dhcpv6RelayMessage};
 use crate::allocator::SubnetAllocator;
 use crate::config::validation::{ip_in_subnet, parse_cidr};
@@ -125,10 +123,11 @@ impl<H: HaBackend> DhcpV6Server<H> {
 
             // Global rate limiting
             if let Some(ref global_rl) = self.global_rate_limiter
-                && !global_rl.check() {
-                    debug!("DHCPv6 packet dropped by global rate limiter");
-                    continue;
-                }
+                && !global_rl.check()
+            {
+                debug!("DHCPv6 packet dropped by global rate limiter");
+                continue;
+            }
 
             // Check if this is a relay message
             let msg_type_byte = data[0];
@@ -168,7 +167,10 @@ impl<H: HaBackend> DhcpV6Server<H> {
                 debug!("DHCPv6 packet dropped by per-client rate limiter");
                 return Ok(None);
             }
-            let label = client_id.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+            let label = client_id
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>();
             if !self.rogue_detector.record(client_id, &label) {
                 debug!("DHCPv6 packet dropped by rogue detector");
                 return Ok(None);
@@ -215,7 +217,10 @@ impl<H: HaBackend> DhcpV6Server<H> {
 
         // RFC 8415 §5.2: drop if hop count exceeds 32
         if relay_msg.hop_count > 32 {
-            warn!(hop_count = relay_msg.hop_count, "dropping relay with excessive hop count");
+            warn!(
+                hop_count = relay_msg.hop_count,
+                "dropping relay with excessive hop count"
+            );
             return Ok(None);
         }
 
@@ -237,9 +242,7 @@ impl<H: HaBackend> DhcpV6Server<H> {
         );
 
         let reply = match client_msg.msg_type {
-            Dhcpv6MessageType::Solicit => {
-                self.handle_solicit(&client_msg, Some(link_addr)).await?
-            }
+            Dhcpv6MessageType::Solicit => self.handle_solicit(&client_msg, Some(link_addr)).await?,
             Dhcpv6MessageType::Request => self.handle_request(&client_msg).await?,
             Dhcpv6MessageType::Renew => self.handle_renew(&client_msg).await?,
             Dhcpv6MessageType::Rebind => self.handle_rebind(&client_msg).await?,
@@ -266,7 +269,8 @@ impl<H: HaBackend> DhcpV6Server<H> {
                     link_address: relay_msg.link_address,
                     peer_address: relay_msg.peer_address,
                     options: {
-                        let mut opts = vec![Dhcpv6Option::RelayMessage(inner_buf[..inner_len].to_vec())];
+                        let mut opts =
+                            vec![Dhcpv6Option::RelayMessage(inner_buf[..inner_len].to_vec())];
                         if let Some(iid) = relay_msg.interface_id() {
                             opts.push(Dhcpv6Option::InterfaceId(iid.to_vec()));
                         }
@@ -324,9 +328,7 @@ impl<H: HaBackend> DhcpV6Server<H> {
         // Process each IA_PD in the request
         for opt in &msg.options {
             if let Dhcpv6Option::IaPd(ia) = opt {
-                let ia_reply = self
-                    .allocate_ia_pd(ia, &client_id, rapid_commit)
-                    .await?;
+                let ia_reply = self.allocate_ia_pd(ia, &client_id, rapid_commit).await?;
                 reply_options.push(Dhcpv6Option::IaPd(ia_reply));
             }
         }
@@ -348,9 +350,10 @@ impl<H: HaBackend> DhcpV6Server<H> {
     ) -> Result<Option<Dhcpv6Message>, Box<dyn std::error::Error + Send + Sync>> {
         // Verify server ID matches us
         if let Some(server_id) = msg.server_id()
-            && server_id != self.server_duid {
-                return Ok(None); // Not for us
-            }
+            && server_id != self.server_duid
+        {
+            return Ok(None); // Not for us
+        }
 
         let client_id = match msg.client_id() {
             Some(c) => c.to_vec(),
@@ -447,13 +450,14 @@ impl<H: HaBackend> DhcpV6Server<H> {
                     if let Dhcpv6Option::IaAddr(ia_addr) = sub_opt {
                         let ip = IpAddr::V6(ia_addr.addr);
                         if let Some(existing) = self.lease_store.get(&ip)
-                            && existing.client_id.as_deref() == Some(&client_id) {
-                                self.ha.release_lease(&ip).await?;
-                                self.wal.log_remove(&ip).await?;
-                                self.lease_store.remove(&ip);
-                                self.release_ip(&ip);
-                                info!(ip = %ia_addr.addr, "DHCPv6 lease released");
-                            }
+                            && existing.client_id.as_deref() == Some(&client_id)
+                        {
+                            self.ha.release_lease(&ip).await?;
+                            self.wal.log_remove(&ip).await?;
+                            self.lease_store.remove(&ip);
+                            self.release_ip(&ip);
+                            info!(ip = %ia_addr.addr, "DHCPv6 lease released");
+                        }
                     }
                 }
             }
@@ -489,8 +493,13 @@ impl<H: HaBackend> DhcpV6Server<H> {
                         warn!(ip = %ia_addr.addr, "DHCPv6 address declined (possible conflict)");
                         // Mark as declined — keep allocated so it's not reassigned
                         let ip = IpAddr::V6(ia_addr.addr);
-                        let subnet_name: Arc<str> = self.subnets.iter()
-                            .find(|s| !s.is_pd && ip_in_subnet(&ip, &IpAddr::V6(s.network_addr), s.prefix_len))
+                        let subnet_name: Arc<str> = self
+                            .subnets
+                            .iter()
+                            .find(|s| {
+                                !s.is_pd
+                                    && ip_in_subnet(&ip, &IpAddr::V6(s.network_addr), s.prefix_len)
+                            })
                             .map(|s| s.network.clone())
                             .unwrap_or_else(|| Arc::from("unknown"));
                         let now_epoch = epoch_now();
@@ -617,11 +626,7 @@ impl<H: HaBackend> DhcpV6Server<H> {
                     return false;
                 }
                 if let Some(la) = link_addr {
-                    ip_in_subnet(
-                        &IpAddr::V6(la),
-                        &IpAddr::V6(s.network_addr),
-                        s.prefix_len,
-                    )
+                    ip_in_subnet(&IpAddr::V6(la), &IpAddr::V6(s.network_addr), s.prefix_len)
                 } else {
                     true // Direct client, use first v6 address subnet
                 }
@@ -646,21 +651,22 @@ impl<H: HaBackend> DhcpV6Server<H> {
         // Check for existing lease
         if let Some(existing) = self.lease_store.get_by_client_id(client_id)
             && existing.is_active()
-                && let IpAddr::V6(v6) = existing.ip {
-                    let lease_time = subnet.config.lease_time;
-                    let preferred = subnet.config.preferred_time.unwrap_or(lease_time / 2);
-                    return Ok(IaNa {
-                        iaid: ia.iaid,
-                        t1: lease_time / 2,
-                        t2: (lease_time as u64 * 7 / 8) as u32,
-                        options: vec![Dhcpv6Option::IaAddr(IaAddr {
-                            addr: v6,
-                            preferred_lifetime: preferred,
-                            valid_lifetime: lease_time,
-                            options: vec![],
-                        })],
-                    });
-                }
+            && let IpAddr::V6(v6) = existing.ip
+        {
+            let lease_time = subnet.config.lease_time;
+            let preferred = subnet.config.preferred_time.unwrap_or(lease_time / 2);
+            return Ok(IaNa {
+                iaid: ia.iaid,
+                t1: lease_time / 2,
+                t2: (lease_time as u64 * 7 / 8) as u32,
+                options: vec![Dhcpv6Option::IaAddr(IaAddr {
+                    addr: v6,
+                    preferred_lifetime: preferred,
+                    valid_lifetime: lease_time,
+                    options: vec![],
+                })],
+            });
+        }
 
         // Allocate from pool
         let allocator = match self.allocators.get(&*subnet.network) {
@@ -847,8 +853,7 @@ impl<H: HaBackend> DhcpV6Server<H> {
 
                 // Find subnet for this address
                 let subnet = self.subnets.iter().find(|s| {
-                    !s.is_pd
-                        && ip_in_subnet(&ip, &IpAddr::V6(s.network_addr), s.prefix_len)
+                    !s.is_pd && ip_in_subnet(&ip, &IpAddr::V6(s.network_addr), s.prefix_len)
                 });
 
                 let subnet = match subnet {
@@ -1001,20 +1006,11 @@ impl<H: HaBackend> DhcpV6Server<H> {
     }
 
     /// Add DNS-related options to a reply
-    fn add_dns_options(
-        &self,
-        options: &mut Vec<Dhcpv6Option>,
-        link_addr: Option<Ipv6Addr>,
-    ) {
+    fn add_dns_options(&self, options: &mut Vec<Dhcpv6Option>, link_addr: Option<Ipv6Addr>) {
         // Find first matching v6 subnet for DNS config
         let subnet = if let Some(la) = link_addr {
             self.subnets.iter().find(|s| {
-                !s.is_pd
-                    && ip_in_subnet(
-                        &IpAddr::V6(la),
-                        &IpAddr::V6(s.network_addr),
-                        s.prefix_len,
-                    )
+                !s.is_pd && ip_in_subnet(&IpAddr::V6(la), &IpAddr::V6(s.network_addr), s.prefix_len)
             })
         } else {
             self.subnets.iter().find(|s| !s.is_pd)
@@ -1039,7 +1035,7 @@ impl<H: HaBackend> DhcpV6Server<H> {
 
     /// Release an IP back to the pool allocator
     fn release_ip(&self, ip: &IpAddr) {
-        for (_, allocator) in self.allocators.iter() {
+        for allocator in self.allocators.values() {
             if allocator.contains(ip) {
                 allocator.release(ip);
                 return;

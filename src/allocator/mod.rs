@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::config::Config;
 use crate::lease::store::LeaseStore;
@@ -68,9 +68,13 @@ impl SubnetAllocator {
         let hint = self.next_hint.load(Ordering::Relaxed) as usize;
 
         // Search from hint, then wrap around if needed
-        let idx = self
-            .find_free(&bitmap, hint)
-            .or_else(|| if hint > 0 { self.find_free(&bitmap, 0) } else { None })?;
+        let idx = self.find_free(&bitmap, hint).or_else(|| {
+            if hint > 0 {
+                self.find_free(&bitmap, 0)
+            } else {
+                None
+            }
+        })?;
 
         self.set_bit(&mut bitmap, idx);
         self.allocated_count.fetch_add(1, Ordering::Relaxed);

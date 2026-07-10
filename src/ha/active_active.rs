@@ -1,13 +1,13 @@
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::net::TcpListener;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, error, info, warn};
 
-use super::peer::{read_message, write_message, TlsConfig};
+use super::peer::{TlsConfig, read_message, write_message};
 use super::protocol::{HaMessage, PeerState};
 use super::{HaBackend, HaError, HaStatus};
 use crate::lease::store::LeaseStore;
@@ -316,8 +316,7 @@ impl ActiveActiveBackend {
                         state: lease_state,
                         start_time,
                         expire_time,
-                        expires_at: std::time::Instant::now()
-                            + Duration::from_secs(remaining),
+                        expires_at: std::time::Instant::now() + Duration::from_secs(remaining),
                         subnet: Arc::from(subnet.as_str()),
                     };
                     self.lease_store.upsert(lease);
@@ -354,8 +353,7 @@ impl ActiveActiveBackend {
                             state: lease_state,
                             start_time: entry.start_time,
                             expire_time: entry.expire_time,
-                            expires_at: std::time::Instant::now()
-                                + Duration::from_secs(remaining),
+                            expires_at: std::time::Instant::now() + Duration::from_secs(remaining),
                             subnet: Arc::from(entry.subnet.as_str()),
                         };
                         self.lease_store.upsert(lease);
@@ -363,10 +361,7 @@ impl ActiveActiveBackend {
                 }
             }
             HaMessage::StateTransition {
-                node_id,
-                from,
-                to,
-                ..
+                node_id, from, to, ..
             } => {
                 info!(peer = %node_id, from = %from, to = %to, "peer state transition");
             }
@@ -385,13 +380,14 @@ impl ActiveActiveBackend {
             // Check if we should transition from CI → PartnerDown
             if state.peer_state == PeerState::CommunicationsInterrupted
                 && let Some(entered) = state.entered_interrupted
-                    && entered.elapsed() >= Duration::from_secs(self.partner_down_delay as u64) {
-                        state.peer_state = PeerState::PartnerDown;
-                        warn!(
-                            delay = self.partner_down_delay,
-                            "partner-down delay expired, taking over full scope"
-                        );
-                    }
+                && entered.elapsed() >= Duration::from_secs(self.partner_down_delay as u64)
+            {
+                state.peer_state = PeerState::PartnerDown;
+                warn!(
+                    delay = self.partner_down_delay,
+                    "partner-down delay expired, taking over full scope"
+                );
+            }
 
             // Check for stale heartbeats in Normal state
             if state.peer_state == PeerState::Normal && state.peer_reachable {
@@ -475,9 +471,7 @@ impl HaBackend for ActiveActiveBackend {
     }
 
     async fn release_lease(&self, ip: &IpAddr) -> Result<(), HaError> {
-        let msg = HaMessage::LeaseRelease {
-            ip: ip.to_string(),
-        };
+        let msg = HaMessage::LeaseRelease { ip: ip.to_string() };
         let _ = self.peer_tx.try_send(msg);
         Ok(())
     }

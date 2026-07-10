@@ -5,10 +5,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, error, info};
 
-use super::peer::{read_message, write_message, TlsConfig};
+use super::peer::{TlsConfig, read_message, write_message};
 use super::protocol::HaMessage;
 use super::{HaBackend, HaError, HaStatus};
 use crate::lease::store::LeaseStore;
@@ -130,7 +130,10 @@ pub struct RaftBackend {
     /// Lease store to apply committed entries
     lease_store: LeaseStore,
     /// Channel to propose new entries
-    propose_tx: mpsc::Sender<(RaftCommand, tokio::sync::oneshot::Sender<Result<(), HaError>>)>,
+    propose_tx: mpsc::Sender<(
+        RaftCommand,
+        tokio::sync::oneshot::Sender<Result<(), HaError>>,
+    )>,
     /// TLS config
     tls_config: Option<Arc<TlsConfig>>,
     /// Listen address for Raft RPCs
@@ -313,11 +316,7 @@ impl RaftBackend {
         let last_log_index = state.last_log_index();
         let last_log_term = state.last_log_term();
 
-        info!(
-            node = self.node_id,
-            term,
-            "starting election"
-        );
+        info!(node = self.node_id, term, "starting election");
 
         let vote_request = RaftRpc::VoteRequest {
             term,
@@ -334,7 +333,10 @@ impl RaftBackend {
         for (_peer_id, _peer_addr) in &self.peers {
             let _msg_json = serde_json::to_vec(&vote_request).unwrap_or_default();
             let _ha_msg = HaMessage::Heartbeat {
-                node_id: format!("raft:{}", serde_json::to_string(&vote_request).unwrap_or_default()),
+                node_id: format!(
+                    "raft:{}",
+                    serde_json::to_string(&vote_request).unwrap_or_default()
+                ),
                 state: super::protocol::PeerState::Normal,
                 active_leases: 0,
                 timestamp: 0,
@@ -403,9 +405,14 @@ impl RaftBackend {
             let peer_id = *peer_id;
 
             tokio::spawn(async move {
-                if let Err(e) =
-                    Self::send_rpc(&peer_addr, &rpc, tls_config.as_deref(), state_clone, peer_id)
-                        .await
+                if let Err(e) = Self::send_rpc(
+                    &peer_addr,
+                    &rpc,
+                    tls_config.as_deref(),
+                    state_clone,
+                    peer_id,
+                )
+                .await
                 {
                     debug!(peer = peer_id, error = %e, "failed to send AppendEntries");
                 }
@@ -443,9 +450,10 @@ impl RaftBackend {
             if let Some(response_msg) = read_message(&mut stream).await? {
                 // Parse response and update state
                 if let HaMessage::Heartbeat { node_id, .. } = response_msg
-                    && let Ok(rpc_response) = serde_json::from_str::<RaftRpc>(&node_id) {
-                        Self::handle_rpc_response(&state, peer_id, rpc_response).await;
-                    }
+                    && let Ok(rpc_response) = serde_json::from_str::<RaftRpc>(&node_id)
+                {
+                    Self::handle_rpc_response(&state, peer_id, rpc_response).await;
+                }
             }
         } else {
             // Plain TCP fallback (development only)
@@ -463,15 +471,14 @@ impl RaftBackend {
     }
 
     /// Handle an RPC response from a peer
-    async fn handle_rpc_response(
-        state: &Arc<RwLock<RaftState>>,
-        peer_id: u64,
-        response: RaftRpc,
-    ) {
+    async fn handle_rpc_response(state: &Arc<RwLock<RaftState>>, peer_id: u64, response: RaftRpc) {
         let mut state = state.write().await;
 
         match response {
-            RaftRpc::VoteResponse { term, vote_granted: _ } => {
+            RaftRpc::VoteResponse {
+                term,
+                vote_granted: _,
+            } => {
                 if term > state.current_term {
                     state.current_term = term;
                     state.role = Role::Follower;
@@ -502,9 +509,10 @@ impl RaftBackend {
                 } else {
                     // Decrement next_index and retry
                     if let Some(ps) = state.peer_state.get_mut(&peer_id)
-                        && ps.next_index > 1 {
-                            ps.next_index -= 1;
-                        }
+                        && ps.next_index > 1
+                    {
+                        ps.next_index -= 1;
+                    }
                 }
             }
             _ => {}
@@ -575,9 +583,10 @@ impl RaftBackend {
                             Ok(Some(msg)) => {
                                 if let Some(response) =
                                     Self::handle_rpc_message(&state, node_id, msg).await
-                                    && write_message(&mut stream, &response).await.is_err() {
-                                        break;
-                                    }
+                                    && write_message(&mut stream, &response).await.is_err()
+                                {
+                                    break;
+                                }
                             }
                             Ok(None) => break,
                             Err(_) => break,
@@ -590,9 +599,10 @@ impl RaftBackend {
                             Ok(Some(msg)) => {
                                 if let Some(response) =
                                     Self::handle_rpc_message(&state, node_id, msg).await
-                                    && write_message(&mut stream, &response).await.is_err() {
-                                        break;
-                                    }
+                                    && write_message(&mut stream, &response).await.is_err()
+                                {
+                                    break;
+                                }
                             }
                             Ok(None) => break,
                             Err(_) => break,
@@ -786,8 +796,7 @@ impl RaftBackend {
                     } => {
                         if let Ok(ip_addr) = ip.parse::<IpAddr>() {
                             let mac_bytes = mac.as_ref().and_then(|m| parse_mac_str(m));
-                            let ls =
-                                LeaseState::from_u8(lease_state).unwrap_or(LeaseState::Bound);
+                            let ls = LeaseState::from_u8(lease_state).unwrap_or(LeaseState::Bound);
                             let now = epoch_now();
                             let remaining = expire_time.saturating_sub(now);
 
@@ -851,9 +860,7 @@ impl HaBackend for RaftBackend {
     }
 
     async fn release_lease(&self, ip: &IpAddr) -> Result<(), HaError> {
-        let cmd = RaftCommand::LeaseRemove {
-            ip: ip.to_string(),
-        };
+        let cmd = RaftCommand::LeaseRemove { ip: ip.to_string() };
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.propose_tx
@@ -909,7 +916,7 @@ fn wrap_rpc(rpc: &RaftRpc) -> HaMessage {
 fn random_election_timeout() -> Duration {
     // 150-300ms range per Raft paper
     let base = 150;
-    let jitter = epoch_now() % 150 ;
+    let jitter = epoch_now() % 150;
     Duration::from_millis(base + jitter)
 }
 

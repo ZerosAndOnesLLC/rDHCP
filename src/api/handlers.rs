@@ -162,7 +162,7 @@ pub async fn delete_lease<H: HaBackend>(
     match state.lease_store.remove(&ip_addr) {
         Some(_) => {
             // Release back to allocator
-            for (_, allocator) in state.allocators.iter() {
+            for allocator in state.allocators.values() {
                 if allocator.contains(&ip_addr) {
                     allocator.release(&ip_addr);
                     break;

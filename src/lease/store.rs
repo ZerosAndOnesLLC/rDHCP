@@ -59,13 +59,15 @@ impl LeaseStore {
         if let Some(old) = self.inner.leases.get(&ip) {
             was_active = old.is_active();
             if let Some(old_mac) = old.mac
-                && lease.mac != Some(old_mac) {
-                    self.inner.mac_index.remove(&old_mac);
-                }
+                && lease.mac != Some(old_mac)
+            {
+                self.inner.mac_index.remove(&old_mac);
+            }
             if let Some(ref old_cid) = old.client_id
-                && lease.client_id.as_ref() != Some(old_cid) {
-                    self.inner.client_id_index.remove(old_cid);
-                }
+                && lease.client_id.as_ref() != Some(old_cid)
+            {
+                self.inner.client_id_index.remove(old_cid);
+            }
         } else {
             was_active = false;
         }
@@ -176,9 +178,11 @@ impl LeaseStore {
                 // Verify the lease is still active and actually expired
                 // (it may have been renewed, changing expire_time)
                 if let Some(lease) = self.inner.leases.get(&ip)
-                    && lease.is_active() && lease.is_expired_at(now_epoch) {
-                        expired.push(ip);
-                    }
+                    && lease.is_active()
+                    && lease.is_expired_at(now_epoch)
+                {
+                    expired.push(ip);
+                }
             }
         }
 
@@ -198,10 +202,7 @@ impl LeaseStore {
     /// Check if an IP is currently leased (Offered or Bound) — no clone.
     #[inline]
     pub fn is_allocated(&self, ip: &IpAddr) -> bool {
-        self.inner
-            .leases
-            .get(ip)
-            .is_some_and(|r| r.is_active())
+        self.inner.leases.get(ip).is_some_and(|r| r.is_active())
     }
 
     /// Count all active leases held by a given MAC address across all subnets.
@@ -209,9 +210,7 @@ impl LeaseStore {
         self.inner
             .leases
             .iter()
-            .filter(|r| {
-                r.value().is_active() && r.value().mac.as_ref() == Some(mac)
-            })
+            .filter(|r| r.value().is_active() && r.value().mac.as_ref() == Some(mac))
             .count()
     }
 

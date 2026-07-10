@@ -201,24 +201,12 @@ impl Dhcpv6Option {
                     if opt_len < 12 {
                         return Err(Dhcpv6PacketError::MalformedOption(pos));
                     }
-                    let iaid = u32::from_be_bytes([
-                        opt_data[0],
-                        opt_data[1],
-                        opt_data[2],
-                        opt_data[3],
-                    ]);
-                    let t1 = u32::from_be_bytes([
-                        opt_data[4],
-                        opt_data[5],
-                        opt_data[6],
-                        opt_data[7],
-                    ]);
-                    let t2 = u32::from_be_bytes([
-                        opt_data[8],
-                        opt_data[9],
-                        opt_data[10],
-                        opt_data[11],
-                    ]);
+                    let iaid =
+                        u32::from_be_bytes([opt_data[0], opt_data[1], opt_data[2], opt_data[3]]);
+                    let t1 =
+                        u32::from_be_bytes([opt_data[4], opt_data[5], opt_data[6], opt_data[7]]);
+                    let t2 =
+                        u32::from_be_bytes([opt_data[8], opt_data[9], opt_data[10], opt_data[11]]);
                     let sub_opts = Self::parse_all_inner(&opt_data[12..], depth + 1)?;
                     Dhcpv6Option::IaNa(IaNa {
                         iaid,
@@ -258,24 +246,12 @@ impl Dhcpv6Option {
                     if opt_len < 12 {
                         return Err(Dhcpv6PacketError::MalformedOption(pos));
                     }
-                    let iaid = u32::from_be_bytes([
-                        opt_data[0],
-                        opt_data[1],
-                        opt_data[2],
-                        opt_data[3],
-                    ]);
-                    let t1 = u32::from_be_bytes([
-                        opt_data[4],
-                        opt_data[5],
-                        opt_data[6],
-                        opt_data[7],
-                    ]);
-                    let t2 = u32::from_be_bytes([
-                        opt_data[8],
-                        opt_data[9],
-                        opt_data[10],
-                        opt_data[11],
-                    ]);
+                    let iaid =
+                        u32::from_be_bytes([opt_data[0], opt_data[1], opt_data[2], opt_data[3]]);
+                    let t1 =
+                        u32::from_be_bytes([opt_data[4], opt_data[5], opt_data[6], opt_data[7]]);
+                    let t2 =
+                        u32::from_be_bytes([opt_data[8], opt_data[9], opt_data[10], opt_data[11]]);
                     let sub_opts = Self::parse_all_inner(&opt_data[12..], depth + 1)?;
                     Dhcpv6Option::IaPd(IaPd {
                         iaid,
@@ -288,18 +264,10 @@ impl Dhcpv6Option {
                     if opt_len < 25 {
                         return Err(Dhcpv6PacketError::MalformedOption(pos));
                     }
-                    let preferred = u32::from_be_bytes([
-                        opt_data[0],
-                        opt_data[1],
-                        opt_data[2],
-                        opt_data[3],
-                    ]);
-                    let valid = u32::from_be_bytes([
-                        opt_data[4],
-                        opt_data[5],
-                        opt_data[6],
-                        opt_data[7],
-                    ]);
+                    let preferred =
+                        u32::from_be_bytes([opt_data[0], opt_data[1], opt_data[2], opt_data[3]]);
+                    let valid =
+                        u32::from_be_bytes([opt_data[4], opt_data[5], opt_data[6], opt_data[7]]);
                     let prefix_len = opt_data[8];
                     let mut prefix_bytes = [0u8; 16];
                     prefix_bytes.copy_from_slice(&opt_data[9..25]);
@@ -426,7 +394,10 @@ impl Dhcpv6Option {
             Dhcpv6Option::RapidCommit => 4,
             Dhcpv6Option::DnsServers(addrs) => 4 + addrs.len() * 16,
             Dhcpv6Option::DomainList(domains) => {
-                let encoded_len: usize = domains.iter().map(|d| d.split('.').map(|l| 1 + l.len()).sum::<usize>() + 1).sum();
+                let encoded_len: usize = domains
+                    .iter()
+                    .map(|d| d.split('.').map(|l| 1 + l.len()).sum::<usize>() + 1)
+                    .sum();
                 4 + encoded_len
             }
             Dhcpv6Option::RelayMessage(data)

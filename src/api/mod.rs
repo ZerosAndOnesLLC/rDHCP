@@ -6,12 +6,12 @@ mod metrics;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use axum::Router;
 use axum::extract::State;
 use axum::http::{Request, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::{delete, get};
-use axum::Router;
 use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tracing::info;
@@ -57,9 +57,7 @@ async fn auth_middleware<H: HaBackend>(
 
     // Check X-API-Key header (constant-time comparison to prevent timing attacks)
     match req.headers().get("x-api-key") {
-        Some(provided)
-            if provided.as_bytes().ct_eq(expected_key.as_bytes()).into() =>
-        {
+        Some(provided) if provided.as_bytes().ct_eq(expected_key.as_bytes()).into() => {
             Ok(next.run(req).await)
         }
         _ => Err(StatusCode::UNAUTHORIZED),
@@ -75,10 +73,7 @@ pub async fn start<H: HaBackend + 'static>(
         // Lease endpoints
         .route("/api/v1/leases", get(handlers::list_leases::<H>))
         .route("/api/v1/leases/{ip}", get(handlers::get_lease::<H>))
-        .route(
-            "/api/v1/leases/{ip}",
-            delete(handlers::delete_lease::<H>),
-        )
+        .route("/api/v1/leases/{ip}", delete(handlers::delete_lease::<H>))
         .route("/api/v1/leases/stats", get(handlers::lease_stats::<H>))
         // Subnet endpoints
         .route("/api/v1/subnets", get(handlers::list_subnets::<H>))

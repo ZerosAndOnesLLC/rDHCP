@@ -1,22 +1,22 @@
+use std::net::Ipv4Addr;
 #[cfg(target_os = "freebsd")]
 use std::os::unix::io::AsRawFd;
-use std::net::Ipv4Addr;
 use std::sync::Arc;
 
 #[cfg(unix)]
 mod single_instance;
 
-use rdhcpd::{allocator, api, lease};
 use rdhcpd::api::ApiState;
 #[cfg(target_os = "freebsd")]
 use rdhcpd::bpf::BpfSender;
 use rdhcpd::config::Config;
 use rdhcpd::dhcpv4::server::{DhcpSender, DhcpV4Server};
-use rdhcpd::dhcpv6::server::{generate_server_duid, DhcpV6Server};
+use rdhcpd::dhcpv6::server::{DhcpV6Server, generate_server_duid};
 use rdhcpd::ha::StandaloneBackend;
 use rdhcpd::lease::store::LeaseStore;
 use rdhcpd::ratelimit::{GlobalRateLimiter, RateLimiter, RogueDetector};
 use rdhcpd::wal::Wal;
+use rdhcpd::{allocator, api, lease};
 use tokio::net::UdpSocket;
 use tracing::{error, info, warn};
 
@@ -83,11 +83,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ha: Arc<StandaloneBackend> = match &config.ha {
         rdhcpd::config::HaConfig::Standalone => Arc::new(StandaloneBackend),
         rdhcpd::config::HaConfig::ActiveActive { .. } => {
-            error!("active-active HA mode is not yet implemented — refusing to start in standalone silently");
+            error!(
+                "active-active HA mode is not yet implemented — refusing to start in standalone silently"
+            );
             std::process::exit(1);
         }
         rdhcpd::config::HaConfig::Raft { .. } => {
-            error!("raft HA mode is not yet implemented — refusing to start in standalone silently");
+            error!(
+                "raft HA mode is not yet implemented — refusing to start in standalone silently"
+            );
             std::process::exit(1);
         }
     };
@@ -140,7 +144,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Warn if API is bound to a non-loopback address without authentication
         if api_config.api_key.is_none() {
             let addr = &api_config.listen;
-            let is_loopback = addr.starts_with("127.") || addr.starts_with("localhost") || addr.starts_with("[::1]");
+            let is_loopback = addr.starts_with("127.")
+                || addr.starts_with("localhost")
+                || addr.starts_with("[::1]");
             if !is_loopback {
                 warn!(
                     listen = %addr,
@@ -172,11 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server_ip = config
         .subnet
         .iter()
-        .find_map(|s| {
-            s.router
-                .as_ref()
-                .and_then(|r| r.parse::<Ipv4Addr>().ok())
-        })
+        .find_map(|s| s.router.as_ref().and_then(|r| r.parse::<Ipv4Addr>().ok()))
         .unwrap_or(Ipv4Addr::UNSPECIFIED);
 
     // Check if we have v4 subnets
@@ -201,7 +203,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(67);
     if dhcpv4_port != 67 {
-        warn!(port = dhcpv4_port, "RDHCPD_V4_PORT override active — not for production use");
+        warn!(
+            port = dhcpv4_port,
+            "RDHCPD_V4_PORT override active — not for production use"
+        );
     }
 
     // Start DHCPv4 server if v4 subnets configured
@@ -235,12 +240,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             for subnet in config.subnet.iter().filter(|s| s.network.contains('.')) {
                                 let cidr_parts: Vec<&str> = subnet.network.split('/').collect();
                                 if cidr_parts.len() == 2 {
-                                    if let (Ok(net_v4), Ok(prefix)) = (cidr_parts[0].parse::<Ipv4Addr>(), cidr_parts[1].parse::<u8>()) {
-                                        let mask = if prefix >= 32 { u32::MAX } else { u32::MAX << (32 - prefix) };
+                                    if let (Ok(net_v4), Ok(prefix)) = (
+                                        cidr_parts[0].parse::<Ipv4Addr>(),
+                                        cidr_parts[1].parse::<u8>(),
+                                    ) {
+                                        let mask = if prefix >= 32 {
+                                            u32::MAX
+                                        } else {
+                                            u32::MAX << (32 - prefix)
+                                        };
                                         if (u32::from(ip) & mask) == (u32::from(net_v4) & mask) {
-                                            let iface_name = unsafe { std::ffi::CStr::from_ptr(ifa.ifa_name) }
-                                                .to_string_lossy()
-                                                .into_owned();
+                                            let iface_name =
+                                                unsafe { std::ffi::CStr::from_ptr(ifa.ifa_name) }
+                                                    .to_string_lossy()
+                                                    .into_owned();
                                             info!(
                                                 interface = %iface_name,
                                                 ip = %ip,
@@ -272,18 +285,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let name = unsafe { std::ffi::CStr::from_ptr(ifa.ifa_name) }
                                     .to_string_lossy();
                                 if name == iface_name.as_str() {
-                                    let sdl = unsafe {
-                                        &*(ifa.ifa_addr as *const libc::sockaddr_dl)
-                                    };
+                                    let sdl =
+                                        unsafe { &*(ifa.ifa_addr as *const libc::sockaddr_dl) };
                                     if sdl.sdl_alen == 6 {
                                         let mac_ptr = unsafe {
-                                            (sdl as *const libc::sockaddr_dl as *const u8)
-                                                .add(sdl.sdl_nlen as usize
-                                                    + std::mem::offset_of!(libc::sockaddr_dl, sdl_data))
+                                            (sdl as *const libc::sockaddr_dl as *const u8).add(
+                                                sdl.sdl_nlen as usize
+                                                    + std::mem::offset_of!(
+                                                        libc::sockaddr_dl,
+                                                        sdl_data
+                                                    ),
+                                            )
                                         };
                                         let mut mac = [0u8; 6];
                                         unsafe {
-                                            std::ptr::copy_nonoverlapping(mac_ptr, mac.as_mut_ptr(), 6);
+                                            std::ptr::copy_nonoverlapping(
+                                                mac_ptr,
+                                                mac.as_mut_ptr(),
+                                                6,
+                                            );
                                         }
                                         info!(
                                             interface = %iface_name,
@@ -303,7 +323,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                unsafe { libc::freeifaddrs(ifaddrs_ptr); }
+                unsafe {
+                    libc::freeifaddrs(ifaddrs_ptr);
+                }
             }
         }
 
@@ -313,21 +335,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(target_os = "freebsd")]
         let sender: Arc<DhcpSender> = {
             match (&detected_iface, &detected_mac) {
-                (Some(iface), Some(mac)) => {
-                    match BpfSender::open(iface, *mac, send_bind_ip) {
-                        Ok(bpf) => {
-                            info!("using BPF raw-frame sender for DHCPv4 replies");
-                            Arc::new(DhcpSender::Bpf(Arc::new(bpf)))
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "BPF open failed, falling back to UDP sender");
-                            Arc::new(DhcpSender::Udp(build_udp_send_socket(send_bind_ip, dhcpv4_port)?))
-                        }
+                (Some(iface), Some(mac)) => match BpfSender::open(iface, *mac, send_bind_ip) {
+                    Ok(bpf) => {
+                        info!("using BPF raw-frame sender for DHCPv4 replies");
+                        Arc::new(DhcpSender::Bpf(Arc::new(bpf)))
                     }
-                }
+                    Err(e) => {
+                        warn!(error = %e, "BPF open failed, falling back to UDP sender");
+                        Arc::new(DhcpSender::Udp(build_udp_send_socket(
+                            send_bind_ip,
+                            dhcpv4_port,
+                        )?))
+                    }
+                },
                 _ => {
                     warn!("could not detect interface/MAC, falling back to UDP sender");
-                    Arc::new(DhcpSender::Udp(build_udp_send_socket(send_bind_ip, dhcpv4_port)?))
+                    Arc::new(DhcpSender::Udp(build_udp_send_socket(
+                        send_bind_ip,
+                        dhcpv4_port,
+                    )?))
                 }
             }
         };
@@ -415,7 +441,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             sock.set_nonblocking(true)?;
             apply_recv_buffer(&sock, recv_buffer_bytes, "[::]:547");
             sock.bind(&"[::]:547".parse::<std::net::SocketAddr>().unwrap().into())
-                .map_err(|e| format!("failed to bind DHCPv6 port 547: {} (try running as root)", e))?;
+                .map_err(|e| {
+                    format!(
+                        "failed to bind DHCPv6 port 547: {} (try running as root)",
+                        e
+                    )
+                })?;
             let dhcpv6_socket = Arc::new(UdpSocket::from_std(sock.into())?);
 
             let dhcpv6_server = DhcpV6Server::new(
@@ -460,7 +491,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             match Config::load(&reload_config_path) {
                 Ok(_new_config) => {
-                    info!("configuration validated successfully (hot reload not yet implemented — restart required to apply changes)");
+                    info!(
+                        "configuration validated successfully (hot reload not yet implemented — restart required to apply changes)"
+                    );
                 }
                 Err(e) => {
                     error!(error = %e, "configuration validation failed");
@@ -566,8 +599,12 @@ fn build_recv_socket(
     let addr: std::net::SocketAddr = bind_addr
         .parse()
         .map_err(|e| format!("invalid bind address {}: {}", bind_addr, e))?;
-    sock.bind(&addr.into())
-        .map_err(|e| format!("failed to bind DHCPv4 {}: {} (try running as root)", bind_addr, e))?;
+    sock.bind(&addr.into()).map_err(|e| {
+        format!(
+            "failed to bind DHCPv4 {}: {} (try running as root)",
+            bind_addr, e
+        )
+    })?;
     Ok(Arc::new(UdpSocket::from_std(sock.into())?))
 }
 

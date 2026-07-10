@@ -10,10 +10,7 @@ use super::{Config, ConfigError};
 fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
     let s = s.trim();
     if !s.len().is_multiple_of(2) {
-        return Err(format!(
-            "hex string must have even length, got {}",
-            s.len()
-        ));
+        return Err(format!("hex string must have even length, got {}", s.len()));
     }
     let mut out = Vec::with_capacity(s.len() / 2);
     for chunk in s.as_bytes().chunks(2) {
@@ -81,10 +78,7 @@ pub fn serialize_option_override(o: &OptionOverride) -> Result<Vec<u8>, String> 
 
     if let Some(ref s) = o.string {
         if s.len() > 255 {
-            return Err(format!(
-                "string value is {} bytes, maximum is 255",
-                s.len()
-            ));
+            return Err(format!("string value is {} bytes, maximum is 255", s.len()));
         }
         if !s.bytes().all(|b| b.is_ascii_graphic() || b == b' ') {
             return Err("string value must contain only printable ASCII characters".to_string());
@@ -154,12 +148,13 @@ fn validate_subnets(config: &Config) -> Result<(), ConfigError> {
                     )));
                 }
                 if let Some(dl) = subnet.delegated_length
-                    && (dl <= prefix_len || dl > 128) {
-                        return Err(ConfigError::Validation(format!(
-                            "subnet[{}]: delegated_length {} must be > prefix_len {} and <= 128",
-                            i, dl, prefix_len
-                        )));
-                    }
+                    && (dl <= prefix_len || dl > 128)
+                {
+                    return Err(ConfigError::Validation(format!(
+                        "subnet[{}]: delegated_length {} must be > prefix_len {} and <= 128",
+                        i, dl, prefix_len
+                    )));
+                }
             }
             other => {
                 return Err(ConfigError::Validation(format!(
@@ -780,7 +775,11 @@ ip = "10.0.0.2"
         );
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("duplicate"), "expected 'duplicate' in: {}", msg);
+        assert!(
+            msg.contains("duplicate"),
+            "expected 'duplicate' in: {}",
+            msg
+        );
     }
 
     #[test]

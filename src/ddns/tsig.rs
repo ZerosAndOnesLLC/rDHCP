@@ -55,10 +55,14 @@ pub fn sign_message(message: &mut Vec<u8>, key: &TsigKey, msg_id: u16) -> Result
         "hmac-sha256" => "hmac-sha256",
         "hmac-sha512" => "hmac-sha512",
         "hmac-md5" | "hmac-md5.sig-alg.reg.int" => {
-            return Err("HMAC-MD5 is deprecated and rejected — use hmac-sha256 or hmac-sha512".to_string());
+            return Err(
+                "HMAC-MD5 is deprecated and rejected — use hmac-sha256 or hmac-sha512".to_string(),
+            );
         }
         "hmac-sha1" => {
-            tracing::warn!("TSIG algorithm hmac-sha1 is deprecated — consider upgrading to hmac-sha256");
+            tracing::warn!(
+                "TSIG algorithm hmac-sha1 is deprecated — consider upgrading to hmac-sha256"
+            );
             "hmac-sha1"
         }
         other => other,
@@ -82,8 +86,7 @@ pub fn sign_message(message: &mut Vec<u8>, key: &TsigKey, msg_id: u16) -> Result
     mac_input.extend_from_slice(&0u16.to_be_bytes());
 
     // Compute HMAC-SHA256
-    let mut hmac = HmacSha256::new_from_slice(&secret)
-        .expect("HMAC can take key of any size");
+    let mut hmac = HmacSha256::new_from_slice(&secret).expect("HMAC can take key of any size");
     hmac.update(&mac_input);
     let mac = hmac.finalize().into_bytes();
 

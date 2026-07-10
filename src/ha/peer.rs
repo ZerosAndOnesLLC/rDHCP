@@ -25,8 +25,8 @@ impl TlsConfig {
         // Load server cert chain
         let cert_file = std::fs::File::open(cert_path)?;
         let mut cert_reader = std::io::BufReader::new(cert_file);
-        let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
-            .collect::<Result<Vec<_>, _>>()?;
+        let certs: Vec<CertificateDer<'static>> =
+            rustls_pemfile::certs(&mut cert_reader).collect::<Result<Vec<_>, _>>()?;
 
         // Load private key
         let key_file = std::fs::File::open(key_path)?;
@@ -37,8 +37,8 @@ impl TlsConfig {
         // Load CA cert for peer verification
         let ca_file = std::fs::File::open(ca_cert_path)?;
         let mut ca_reader = std::io::BufReader::new(ca_file);
-        let ca_certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut ca_reader)
-            .collect::<Result<Vec<_>, _>>()?;
+        let ca_certs: Vec<CertificateDer<'static>> =
+            rustls_pemfile::certs(&mut ca_reader).collect::<Result<Vec<_>, _>>()?;
 
         let mut root_store = rustls::RootCertStore::empty();
         for cert in &ca_certs {

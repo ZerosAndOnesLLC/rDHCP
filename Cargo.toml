@@ -25,6 +25,10 @@ path = "src/main.rs"
 name = "dhcpv4_relay_gates"
 required-features = ["test-helpers"]
 
+[[test]]
+name = "dhcpv4_lease_stickiness"
+required-features = ["test-helpers"]
+
 
 [dependencies]
 # Async runtime

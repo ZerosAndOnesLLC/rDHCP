@@ -327,9 +327,7 @@ impl DhcpV4Packet {
             xid: self.xid,
             secs: 0,
             flags: self.flags,
-            ciaddr: if msg_type == MessageType::Ack
-                && !self.ciaddr.is_unspecified()
-            {
+            ciaddr: if msg_type == MessageType::Ack && !self.ciaddr.is_unspecified() {
                 self.ciaddr
             } else {
                 Ipv4Addr::UNSPECIFIED
@@ -382,8 +380,8 @@ mod tests {
     fn test_rfc2131_offsets() {
         // Verify offset arithmetic
         assert_eq!(CHADDR_OFFSET, 28); // op(1)+htype(1)+hlen(1)+hops(1)+xid(4)+secs(2)+flags(2)+ciaddr(4)+yiaddr(4)+siaddr(4)+giaddr(4) = 28
-        assert_eq!(SNAME_OFFSET, 44);  // chaddr(16) + 28 = 44
-        assert_eq!(FILE_OFFSET, 108);  // sname(64) + 44 = 108
+        assert_eq!(SNAME_OFFSET, 44); // chaddr(16) + 28 = 44
+        assert_eq!(FILE_OFFSET, 108); // sname(64) + 44 = 108
         assert_eq!(COOKIE_OFFSET, 236); // file(128) + 108 = 236
         assert_eq!(OPTIONS_OFFSET, 240); // cookie(4) + 236 = 240
     }
@@ -425,8 +423,8 @@ mod tests {
 
         // Verify options start after cookie
         assert_eq!(buf[240], 53); // option 53 = message type
-        assert_eq!(buf[241], 1);  // length 1
-        assert_eq!(buf[242], 1);  // DISCOVER
+        assert_eq!(buf[241], 1); // length 1
+        assert_eq!(buf[242], 1); // DISCOVER
 
         // Parse it back
         let parsed = DhcpV4Packet::parse(&buf[..len]).unwrap();

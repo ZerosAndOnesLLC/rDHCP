@@ -257,7 +257,8 @@ impl DhcpOption {
                     if opt_len != 1 {
                         return Err(PacketError::MalformedOption(pos));
                     }
-                    let mt = MessageType::from_u8(opt_data[0]).ok_or(PacketError::MalformedOption(pos))?;
+                    let mt = MessageType::from_u8(opt_data[0])
+                        .ok_or(PacketError::MalformedOption(pos))?;
                     DhcpOption::MessageType(mt)
                 }
                 code::SERVER_ID => {
@@ -271,9 +272,7 @@ impl DhcpOption {
                         opt_data[3],
                     ))
                 }
-                code::PARAMETER_REQUEST_LIST => {
-                    DhcpOption::ParameterRequestList(opt_data.to_vec())
-                }
+                code::PARAMETER_REQUEST_LIST => DhcpOption::ParameterRequestList(opt_data.to_vec()),
                 code::MAX_MESSAGE_SIZE => {
                     if opt_len != 2 {
                         return Err(PacketError::MalformedOption(pos));
@@ -563,10 +562,8 @@ mod tests {
 
     #[test]
     fn ntp_servers_roundtrip() {
-        let opt = DhcpOption::NtpServers(vec![
-            Ipv4Addr::new(10, 0, 0, 1),
-            Ipv4Addr::new(10, 0, 0, 2),
-        ]);
+        let opt =
+            DhcpOption::NtpServers(vec![Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(10, 0, 0, 2)]);
         let mut buf = [0u8; 16];
         let len = opt.serialize(&mut buf);
         assert_eq!(&buf[..len], &[42, 8, 10, 0, 0, 1, 10, 0, 0, 2]);
