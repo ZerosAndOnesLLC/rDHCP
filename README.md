@@ -456,6 +456,11 @@ sudo apt install kea-admin
 sudo ./bench/run.sh
 ```
 
+Each test samples the server's RSS once per second during the load and prints a
+`start / peak / end / drift` line alongside throughput. A large positive drift under
+a bounded workload (e.g. the renewal storm, where the client set is fixed) is a
+memory-leak signal — it should stay near zero.
+
 ## Configuration Reference
 
 ### `[global]`
