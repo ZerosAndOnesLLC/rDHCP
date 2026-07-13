@@ -471,6 +471,7 @@ memory-leak signal — it should stay near zero.
 | `log_format` | string | `"text"` | Log format: `text` or `json` |
 | `lease_db` | string | `"/var/lib/rdhcpd/leases"` | Directory for WAL and snapshots |
 | `workers` | int | `1` | Receive workers per protocol (DHCPv4/v6) |
+| `expired_lease_retention_secs` | int | `86400` | Keep an expired lease this long for stickiness (re-offer a returning client its old IP), then reap it so a large pool churned by one-shot clients can't grow memory without limit. `0` = keep forever |
 | `recv_buffer_bytes` | int | `4194304` | Receive socket buffer (`SO_RCVBUF`, 4 MiB); absorbs boot storms. Capped by `net.core.rmem_max` — raise that sysctl to grant more; `0` = OS default |
 | `rate_limit_burst` | int | `10` | Per-client max burst (packets) |
 | `rate_limit_pps` | float | `5.0` | Per-client sustained rate (packets/sec) |

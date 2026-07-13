@@ -26,6 +26,10 @@ struct LeaseStoreInner {
     /// Expiry queue: expire_time → list of IPs expiring at that second.
     /// Protected by Mutex since it's only accessed by the expiry task + upsert.
     expiry_queue: Mutex<BTreeMap<u64, Vec<IpAddr>>>,
+    /// Reap queue: reap_time → list of expired IPs to fully remove at that second.
+    /// Expired leases are kept for stickiness, then reaped after a retention window
+    /// so a large pool churned by one-shot clients can't grow memory without limit.
+    reap_queue: Mutex<BTreeMap<u64, Vec<IpAddr>>>,
     /// Atomic active lease counter (Offered + Bound)
     active_count: AtomicUsize,
 }
@@ -45,6 +49,7 @@ impl LeaseStore {
                 mac_index: DashMap::new(),
                 client_id_index: DashMap::new(),
                 expiry_queue: Mutex::new(BTreeMap::new()),
+                reap_queue: Mutex::new(BTreeMap::new()),
                 active_count: AtomicUsize::new(0),
             }),
         }
@@ -187,6 +192,36 @@ impl LeaseStore {
         }
 
         expired
+    }
+
+    /// Schedule an expired lease's IP to be reaped (fully removed) at `reap_at`
+    /// (epoch seconds). Called when a lease transitions to `Expired`.
+    pub fn schedule_reap(&self, ip: IpAddr, reap_at: u64) {
+        let mut rq = self.inner.reap_queue.lock().unwrap();
+        rq.entry(reap_at).or_default().push(ip);
+    }
+
+    /// Drain the reap queue up to `now_epoch` and return IPs whose lease is still
+    /// `Expired` and has been expired for at least `retention` seconds (i.e. it was
+    /// not re-offered, and the slot wasn't reallocated to a newer client). O(k).
+    pub fn drain_reapable(&self, now_epoch: u64, retention: u64) -> Vec<IpAddr> {
+        let mut rq = self.inner.reap_queue.lock().unwrap();
+        let remaining = rq.split_off(&(now_epoch + 1));
+        let due = std::mem::replace(&mut *rq, remaining);
+        drop(rq);
+
+        let mut reapable = Vec::new();
+        for (_reap_at, ips) in due {
+            for ip in ips {
+                if let Some(lease) = self.inner.leases.get(&ip)
+                    && lease.state == LeaseState::Expired
+                    && now_epoch >= lease.expire_time.saturating_add(retention)
+                {
+                    reapable.push(ip);
+                }
+            }
+        }
+        reapable
     }
 
     /// Get all leases for a given subnet.

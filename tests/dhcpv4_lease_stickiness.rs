@@ -85,6 +85,7 @@ fn make_global() -> GlobalConfig {
         relay_rate_limit_burst: 100,
         relay_rate_limit_pps: 100.0,
         recv_buffer_bytes: 0,
+        expired_lease_retention_secs: 0,
     }
 }
 
@@ -214,7 +215,7 @@ async fn expiry_releases_ip_to_allocator() {
         "precondition: bitmap holds the bit"
     );
 
-    let count = process_expired_once(&lease_store, &allocators, now_secs());
+    let count = process_expired_once(&lease_store, &allocators, now_secs(), 0);
     assert_eq!(count, 1, "exactly one lease expired");
 
     assert!(
@@ -295,7 +296,7 @@ async fn discover_reoffers_expired_ip_to_same_client() {
         -1,
         "10.0.0.0/24",
     );
-    process_expired_once(&lease_store, &allocators, now_secs());
+    process_expired_once(&lease_store, &allocators, now_secs(), 0);
 
     let alloc = allocators.get("10.0.0.0/24").unwrap();
     assert!(
@@ -347,7 +348,7 @@ async fn discover_does_not_steal_active_lease_for_returning_client() {
         -1,
         "10.0.0.0/24",
     );
-    process_expired_once(&lease_store, &allocators, now_secs());
+    process_expired_once(&lease_store, &allocators, now_secs(), 0);
 
     // A different MAC then takes the same IP via a fresh active lease.
     seed_lease(
