@@ -419,7 +419,7 @@ fn default_recv_buffer_bytes() -> usize {
 }
 
 fn default_expired_lease_retention_secs() -> u64 {
-    86_400 // 1 day of stickiness, then reap
+    30 * 86_400 // 30 days of stickiness, then reap
 }
 
 fn default_relay_rate_limit_pps() -> f64 {
