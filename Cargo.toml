@@ -9,6 +9,7 @@ homepage = "https://github.com/ZerosAndOnesLLC/rDHCP"
 readme = "README.md"
 keywords = ["dhcp", "dhcpv6", "networking", "server", "high-availability"]
 categories = ["network-programming", "command-line-utilities"]
+exclude = ["plan.md", "docs/", "bench/", ".github/"]
 
 [features]
 test-helpers = []
