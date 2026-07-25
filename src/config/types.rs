@@ -71,6 +71,13 @@ pub struct GlobalConfig {
     /// that sysctl to grant more. Set to 0 to leave the OS default untouched.
     #[serde(default = "default_recv_buffer_bytes")]
     pub recv_buffer_bytes: usize,
+    /// How long (seconds) to retain an expired lease in the store before reaping
+    /// it. Expired leases are kept so a returning client can be re-offered its
+    /// previous IP (stickiness); this bounds that retention so a huge pool churned
+    /// by many one-shot clients can't grow memory without limit. `0` = keep
+    /// expired leases forever (previous behavior).
+    #[serde(default = "default_expired_lease_retention_secs")]
+    pub expired_lease_retention_secs: u64,
 }
 
 /// REST API server configuration.
@@ -409,6 +416,10 @@ fn default_relay_rate_limit_burst() -> u32 {
 
 fn default_recv_buffer_bytes() -> usize {
     4 * 1024 * 1024 // 4 MiB
+}
+
+fn default_expired_lease_retention_secs() -> u64 {
+    30 * 86_400 // 30 days of stickiness, then reap
 }
 
 fn default_relay_rate_limit_pps() -> f64 {
