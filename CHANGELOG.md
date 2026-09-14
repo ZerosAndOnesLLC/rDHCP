@@ -5,6 +5,11 @@ All notable changes to rDHCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.2] - 2026-09-14
+
+### Changed
+- Refreshed `Cargo.lock` to the latest compatible dependency releases (`rustls` 0.23.45, `tokio-rustls` 0.26.5, `toml` 1.1.6, `tower-http` 0.7.1, `crc32fast` 1.5.2, and transitive updates).
+
 ## [0.16.1] - 2026-08-25
 
 ### Changed
