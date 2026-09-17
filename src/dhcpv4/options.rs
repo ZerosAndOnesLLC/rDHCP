@@ -180,8 +180,10 @@ impl DhcpOption {
                         return Err(PacketError::MalformedOption(pos));
                     }
                     let addrs = opt_data
-                        .chunks_exact(4)
-                        .map(|c| Ipv4Addr::new(c[0], c[1], c[2], c[3]))
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|c| Ipv4Addr::from(*c))
                         .collect();
                     DhcpOption::Router(addrs)
                 }
@@ -190,8 +192,10 @@ impl DhcpOption {
                         return Err(PacketError::MalformedOption(pos));
                     }
                     let addrs = opt_data
-                        .chunks_exact(4)
-                        .map(|c| Ipv4Addr::new(c[0], c[1], c[2], c[3]))
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|c| Ipv4Addr::from(*c))
                         .collect();
                     DhcpOption::DnsServers(addrs)
                 }
@@ -200,8 +204,10 @@ impl DhcpOption {
                         return Err(PacketError::MalformedOption(pos));
                     }
                     let addrs = opt_data
-                        .chunks_exact(4)
-                        .map(|c| Ipv4Addr::new(c[0], c[1], c[2], c[3]))
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|c| Ipv4Addr::from(*c))
                         .collect();
                     DhcpOption::NtpServers(addrs)
                 }

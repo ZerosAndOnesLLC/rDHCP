@@ -286,8 +286,10 @@ impl Dhcpv6Option {
                         return Err(Dhcpv6PacketError::MalformedOption(pos));
                     }
                     let codes = opt_data
-                        .chunks_exact(2)
-                        .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|c| u16::from_be_bytes(*c))
                         .collect();
                     Dhcpv6Option::OptionRequest(codes)
                 }
@@ -322,12 +324,10 @@ impl Dhcpv6Option {
                         return Err(Dhcpv6PacketError::MalformedOption(pos));
                     }
                     let addrs = opt_data
-                        .chunks_exact(16)
-                        .map(|c| {
-                            let mut bytes = [0u8; 16];
-                            bytes.copy_from_slice(c);
-                            Ipv6Addr::from(bytes)
-                        })
+                        .as_chunks::<16>()
+                        .0
+                        .iter()
+                        .map(|c| Ipv6Addr::from(*c))
                         .collect();
                     Dhcpv6Option::DnsServers(addrs)
                 }
