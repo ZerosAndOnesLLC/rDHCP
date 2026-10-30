@@ -595,6 +595,12 @@ follow-up: the change requires making the config dynamically mutable (adding
 `RwLock<Config>` and extending the `HaBackend` trait), which is deferred until the
 active-active and Raft HA backends are implemented.
 
+## CI & Releases
+
+- **Pull requests** run checks only, on GitHub-hosted `ubuntu-latest` runners: `cargo fmt --check`, `cargo clippy --all-targets -D warnings`, `cargo test`. No release builds or artifacts.
+- **Merges to `main`** don't re-run CI; the PR checks already covered the change.
+- **Releases**: `gh release create v<version> --generate-notes`. Publishing the release triggers `release.yml`, which builds static musl binaries for x86_64 and aarch64 (via `cross`) on GitHub-hosted `ubuntu-latest` and uploads the tarballs to that release. To rebuild an existing release, run the workflow manually with its tag.
+
 ## License
 
 MIT
