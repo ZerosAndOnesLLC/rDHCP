@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
@@ -23,22 +24,15 @@ impl TlsConfig {
         ca_cert_path: &str,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         // Load server cert chain
-        let cert_file = std::fs::File::open(cert_path)?;
-        let mut cert_reader = std::io::BufReader::new(cert_file);
         let certs: Vec<CertificateDer<'static>> =
-            rustls_pemfile::certs(&mut cert_reader).collect::<Result<Vec<_>, _>>()?;
+            CertificateDer::pem_file_iter(cert_path)?.collect::<Result<Vec<_>, _>>()?;
 
         // Load private key
-        let key_file = std::fs::File::open(key_path)?;
-        let mut key_reader = std::io::BufReader::new(key_file);
-        let key: PrivateKeyDer<'static> = rustls_pemfile::private_key(&mut key_reader)?
-            .ok_or("no private key found in key file")?;
+        let key = PrivateKeyDer::from_pem_file(key_path)?;
 
         // Load CA cert for peer verification
-        let ca_file = std::fs::File::open(ca_cert_path)?;
-        let mut ca_reader = std::io::BufReader::new(ca_file);
         let ca_certs: Vec<CertificateDer<'static>> =
-            rustls_pemfile::certs(&mut ca_reader).collect::<Result<Vec<_>, _>>()?;
+            CertificateDer::pem_file_iter(ca_cert_path)?.collect::<Result<Vec<_>, _>>()?;
 
         let mut root_store = rustls::RootCertStore::empty();
         for cert in &ca_certs {
