@@ -5,6 +5,16 @@ All notable changes to rDHCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.3] - 2026-11-13
+
+### Changed
+- Dropped the unmaintained `rustls-pemfile` dependency (RUSTSEC-2025-0134); the HA peer TLS loader now uses rustls' built-in `pki_types` PEM parser.
+- Refreshed `Cargo.lock` to the latest compatible dependency releases (`toml` 1.2.1, `rustls-webpki` 0.103.17, `rustls-pki-types` 1.16.0, and transitive updates).
+- Docker builder image bumped to `rust:1.100-slim`.
+
+### Fixed
+- Fixed-width option parsers (DHCPv4 router/DNS/NTP, DHCPv6 option-request/DNS) now use `as_chunks`, satisfying the newer clippy lint; behavior is unchanged.
+
 ## [0.16.2] - 2026-09-14
 
 ### Changed
