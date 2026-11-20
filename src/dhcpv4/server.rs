@@ -603,15 +603,13 @@ impl<H: HaBackend> DhcpV4Server<H> {
         }
 
         // Pool high-water mark alerting
-        if self.pool_high_water > 0.0 {
-            let util = allocator.utilization();
-            if util >= self.pool_high_water {
-                warn!(
-                    subnet = %subnet.network,
-                    utilization = format!("{:.1}%", util * 100.0),
-                    "pool utilization exceeds high-water mark"
-                );
-            }
+        // `pool_high_water` is a 0.0–1.0 fraction; `utilization()` is a percentage.
+        if allocator.exceeds_high_water(self.pool_high_water) {
+            warn!(
+                subnet = %subnet.network,
+                utilization = format!("{:.1}%", allocator.utilization()),
+                "pool utilization exceeds high-water mark"
+            );
         }
 
         let options = self.build_offer_options(&subnet);
