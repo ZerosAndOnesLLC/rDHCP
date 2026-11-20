@@ -152,7 +152,24 @@ impl SubnetAllocator {
         if self.pool_size == 0 {
             return 0.0;
         }
-        (self.allocated() as f64 / self.pool_size as f64) * 100.0
+        self.utilization_ratio() * 100.0
+    }
+
+    /// Utilization as a fraction 0.0–1.0 (lock-free). This is the unit used
+    /// by `pool_high_water`; `utilization()` is the percentage form.
+    #[inline]
+    pub fn utilization_ratio(&self) -> f64 {
+        if self.pool_size == 0 {
+            return 0.0;
+        }
+        (self.allocated().min(self.pool_size) as f64) / self.pool_size as f64
+    }
+
+    /// Whether utilization has reached the `pool_high_water` mark, given as a
+    /// fraction 0.0–1.0. A non-positive mark disables the check.
+    #[inline]
+    pub fn exceeds_high_water(&self, high_water: f64) -> bool {
+        high_water > 0.0 && self.utilization_ratio() >= high_water
     }
 
     /// Convert an IP to a bitmap index, returning None if out of range.
@@ -402,6 +419,53 @@ mod tests {
             assert!(alloc.allocate().is_some());
         }
         assert!(alloc.allocate().is_none());
+    }
+
+    /// Regression for #78: the high-water alert compared the percentage
+    /// form of utilization (0–100) against the 0.0–1.0 `pool_high_water`
+    /// fraction and then multiplied by 100 again, so a 20-IP pool with a few
+    /// leases logged "1372.5%"-style values and alerted constantly.
+    #[test]
+    fn test_high_water_uses_fraction_and_never_exceeds_100_percent() {
+        let ip = |d| IpAddr::V4(Ipv4Addr::new(172, 29, 69, d));
+        // Pool 172.29.69.200–219 (20 IPs), like the appliance config.
+        let lan = SubnetAllocator::new(ip(200), ip(219));
+        // A second subnet with its own pool: its leases must not count here.
+        let other = SubnetAllocator::new(
+            IpAddr::V4(Ipv4Addr::new(172, 29, 42, 30)),
+            IpAddr::V4(Ipv4Addr::new(172, 29, 42, 199)),
+        );
+        for d in 30..=120 {
+            assert!(other.allocate_specific(&IpAddr::V4(Ipv4Addr::new(172, 29, 42, d))));
+        }
+
+        // Reservations: one inside the pool, one outside it (not counted).
+        assert!(lan.allocate_specific(&ip(205)));
+        assert!(!lan.allocate_specific(&ip(10)));
+        // Two dynamic leases, each renewed / replayed from the WAL many
+        // times: re-marking an already-allocated IP must not double count.
+        for _ in 0..1000 {
+            lan.allocate_specific(&ip(200));
+            lan.allocate_specific(&ip(201));
+        }
+        assert_eq!(lan.allocated(), 3);
+        assert_eq!(lan.capacity(), 20);
+
+        // 3/20 = 15% — well under a 0.9 (90%) high-water mark.
+        assert!((lan.utilization_ratio() - 0.15).abs() < 1e-9);
+        assert!((lan.utilization() - 15.0).abs() < 1e-9);
+        // The old check (`utilization() >= 0.9`, logged as `* 100`) fired
+        // here and would have reported 1500.0%.
+        assert!(lan.utilization() >= 0.9);
+        assert!(!lan.exceeds_high_water(0.9));
+
+        // Fill the pool: alert fires, and utilization tops out at 100%.
+        while lan.allocate().is_some() {}
+        assert!(lan.exceeds_high_water(0.9));
+        assert!((lan.utilization_ratio() - 1.0).abs() < 1e-9);
+        assert!((lan.utilization() - 100.0).abs() < 1e-9);
+        // Disabled mark never alerts.
+        assert!(!lan.exceeds_high_water(0.0));
     }
 
     /// Test single-IP pool
