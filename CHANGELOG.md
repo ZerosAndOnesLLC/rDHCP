@@ -5,6 +5,14 @@ All notable changes to rDHCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.4] - 2026-11-20
+
+### Fixed
+- The pool high-water alert compared a 0–100 utilization percentage against the 0.0–1.0 `pool_high_water` fraction, so it fired for any pool over ~0.9% used and logged values 100x too large (e.g. `utilization="1372.5%"` for a pool 13.7% full). The check now uses a capped 0.0–1.0 ratio and logs the real percentage (#78).
+
+### Changed
+- Removed the unused `byteorder` and `tower-http` dependencies and the redundant `homepage` manifest field.
+
 ## [0.16.3] - 2026-11-13
 
 ### Changed
