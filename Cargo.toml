@@ -81,7 +81,7 @@ axum = "0.8"
 socket2 = { version = "0.6", features = ["all"] }
 
 # Signal handling + lockfile fcntl (single-instance enforcement)
-nix = { version = "0.31", features = ["signal", "fs", "process"] }
+nix = { version = "0.32", features = ["signal", "fs", "process"] }
 
 # Platform-specific syscalls (FreeBSD IP_BINDANY)
 [target.'cfg(target_os = "freebsd")'.dependencies]
